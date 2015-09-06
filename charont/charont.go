@@ -7,16 +7,27 @@ type Price struct {
 }
 
 type Order struct {
-	Id    int64
-	Price float64
+	Id        int64
+	Price     float64
+	Type      string
+	Open      bool
+	Profit    float64
+	CloseRate float64
+}
+
+type CurrVal struct {
+	Bid float64 `json:"b"`
+	Ask float64 `json:"a"`
+	Ts  int64   `json:"t"`
 }
 
 type Int interface {
 	GetBaseCurrency() string
 	GetCurrencies() []string
-	GetRange(currency string, from, to int64) []*Price
-	Buy(currency string, units int, bound int64) (order *Order, err error)
-	Sell(currency string, units int, bound int64) (order *Order, err error)
+	GetRange(currency string, from, to int64) []*CurrVal
+	Buy(currency string, units int, bound float64) (order *Order, err error)
+	Sell(currency string, units int, bound float64) (order *Order, err error)
+	CloseOrder(ord *Order) (err error)
 	CloseAllOpenOrders()
 }
 
