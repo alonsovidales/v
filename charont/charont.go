@@ -9,6 +9,8 @@ type Price struct {
 type Order struct {
 	Id        int64
 	Price     float64
+	Units     int
+	Curr      string
 	Type      string
 	Open      bool
 	Profit    float64
@@ -25,6 +27,7 @@ type Int interface {
 	GetBaseCurrency() string
 	GetCurrencies() []string
 	GetRange(currency string, from, to int64) []*CurrVal
+	AddListerner(currency string, fn func(currency string))
 	Buy(currency string, units int, bound float64) (order *Order, err error)
 	Sell(currency string, units int, bound float64) (order *Order, err error)
 	CloseOrder(ord *Order) (err error)

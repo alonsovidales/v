@@ -63,6 +63,7 @@ type Oanda struct {
 	mutexCurr      map[string]*sync.Mutex
 	openOrders     map[int64]*Order
 	currLogsFile   *os.File
+	listeners      map[string][]func(currency string)
 }
 
 func InitOandaApi(authToken string, accountId int, currencies []string, currLogsFile string) (api *Oanda, err error) {
@@ -209,6 +210,7 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 	order = &Order{
 		Id:    orderInfo.Info.Id,
 		Price: orderInfo.Price,
+		Units: units,
 		Open:  true,
 		Type:  side,
 	}
@@ -310,6 +312,11 @@ func (api *Oanda) ratesCollector() {
 					api.mutex.Unlock()
 				}
 
+				if listeners, ok := api.listeners[curr]; ok {
+					for _, listener := range listeners {
+						listener(curr)
+					}
+				}
 				if len(api.currencyValues[curr]) > MAX_RATES_TO_STORE {
 					api.currencyValues[curr] = api.currencyValues[curr][1:]
 				}
@@ -319,6 +326,15 @@ func (api *Oanda) ratesCollector() {
 			}
 		}
 	}
+}
+
+func (api *Oanda) AddListerner(currency string, fn func(currency string)) {
+	api.mutex.Lock()
+	if _, ok := api.listeners[currency]; !ok {
+		api.listeners[currency] = []func(currency string){}
+	}
+	api.listeners[currency] = append(api.listeners[currency], fn)
+	api.mutex.Unlock()
 }
 
 func (api *Oanda) doRequest(method string, url string, data url.Values) (body []byte, err error) {
