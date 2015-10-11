@@ -73,6 +73,7 @@ func InitOandaApi(authToken string, accountId int, currencies []string, currLogs
 		authToken:  authToken,
 		currencies: currencies,
 		mutexCurr:  make(map[string]*sync.Mutex),
+		listeners:  make(map[string][]func(currency string)),
 	}
 
 	if currLogsFile != "" {
@@ -150,6 +151,9 @@ func (api *Oanda) GetRange(curr string, from, to int64) []*CurrVal {
 	}
 
 	fromPos := max
+	if fromPos >= len(api.currencyValues[curr]) {
+		fromPos--
+	}
 	if api.currencyValues[curr][fromPos].Ts >= from {
 		fromPos = min
 	}
@@ -170,6 +174,9 @@ func (api *Oanda) GetRange(curr string, from, to int64) []*CurrVal {
 	}
 
 	toPos := max
+	if toPos >= len(api.currencyValues[curr]) {
+		toPos--
+	}
 	if api.currencyValues[curr][toPos].Ts >= to {
 		toPos = min
 	}
@@ -222,11 +229,12 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 	return
 }
 
-func (api *Oanda) Buy(currency string, units int, bound float64) (order *Order, err error) {
+// TODO: Implement the realOps flag
+func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
 	return api.placeMarketOrder(currency, units, "buy", bound)
 }
 
-func (api *Oanda) Sell(currency string, units int, bound float64) (order *Order, err error) {
+func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
 	return api.placeMarketOrder(currency, units, "sell", bound)
 }
 
@@ -314,7 +322,7 @@ func (api *Oanda) ratesCollector() {
 
 				if listeners, ok := api.listeners[curr]; ok {
 					for _, listener := range listeners {
-						listener(curr)
+						go listener(curr)
 					}
 				}
 				if len(api.currencyValues[curr]) > MAX_RATES_TO_STORE {

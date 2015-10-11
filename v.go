@@ -5,6 +5,7 @@ import (
 	"github.com/alonsovidales/pit/cfg"
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
+	"github.com/alonsovidales/v/hades"
 	"os"
 	"os/signal"
 	"runtime"
@@ -30,26 +31,39 @@ func main() {
 		)
 	}
 
-	api, err := charont.InitOandaApi(
-		cfg.GetStr("oanda", "token"),
-		int(cfg.GetInt("oanda", "account-id")),
-		strings.Split(cfg.GetStr("oanda", "currencies"), ","),
-		cfg.GetStr("oanda", "exanges-log"),
-	)
+	var collector charont.Int
+	var err error
 
-	if err != nil {
-		log.Fatal("The API connection can't be loaded")
-	}
-
-	if runningMode != "collect" {
-		var collector charont.Int
-
-		if runningMode == "train" {
-			if len(os.Args) < 4 {
-				fmt.Println("<train_file> not specified")
-			}
-			collector = charont.GetMock(os.Args[4])
+	if runningMode != "train" {
+		collector, err = charont.InitOandaApi(
+			cfg.GetStr("oanda", "token"),
+			int(cfg.GetInt("oanda", "account-id")),
+			strings.Split(cfg.GetStr("oanda", "currencies"), ","),
+			cfg.GetStr("oanda", "exanges-log"),
+		)
+		if err != nil {
+			log.Fatal("The API connection can't be loaded")
 		}
+	} else {
+		if len(os.Args) < 4 {
+			fmt.Println("<train_file> not specified")
+		}
+		collector = charont.GetMock(
+			os.Args[4],
+			1000,
+			strings.Split(cfg.GetStr("oanda", "currencies"), ","),
+			int(cfg.GetInt("mock", "http-port")),
+		)
+	}
+	if runningMode != "collect" {
+		hades.GetHades(
+			int(cfg.GetInt("traders-window", "total")),
+			int(cfg.GetInt("traders-window", "from-size")),
+			collector,
+			int(cfg.GetInt("traders-window", "units-to-use")),
+			int(cfg.GetInt("traders-window", "min-samples-to-consider")),
+			int(cfg.GetInt("traders-window", "last-ops-to-considerer")),
+			int(cfg.GetInt("traders-window", "max-traders-that-can-play")))
 	}
 
 	log.Info("System started...")
@@ -59,5 +73,5 @@ func main() {
 	<-c
 
 	log.Info("Stopping all the services")
-	api.CloseAllOpenOrders()
+	collector.CloseAllOpenOrders()
 }
