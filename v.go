@@ -63,7 +63,8 @@ func main() {
 			int(cfg.GetInt("traders-window", "units-to-use")),
 			int(cfg.GetInt("traders-window", "min-samples-to-consider")),
 			int(cfg.GetInt("traders-window", "last-ops-to-considerer")),
-			int(cfg.GetInt("traders-window", "max-traders-that-can-play")))
+			int(cfg.GetInt("traders-window", "max-traders-that-can-play")),
+			int(cfg.GetInt("traders-window", "max-time-to-wait-sec")))
 	}
 
 	log.Info("System started...")

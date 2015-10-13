@@ -20,7 +20,7 @@ type Mock struct {
 	openOrders     map[int64]*Order
 	ordersByCurr   map[string][]*Order
 	currLogsFile   *os.File
-	listeners      map[string][]func(currency string)
+	listeners      map[string][]func(currency string, ts int64)
 	orders         int64
 	currencies     []string
 	currentWin     float64
@@ -41,7 +41,7 @@ func GetMock(feedsFile string, feedsBySecond int, currencies []string, httpPort 
 		mutexCurr:     make(map[string]*sync.Mutex),
 		ordersByCurr:  make(map[string][]*Order),
 		currencies:    currencies,
-		listeners:     make(map[string][]func(currency string)),
+		listeners:     make(map[string][]func(currency string, ts int64)),
 		openOrders:    make(map[int64]*Order),
 	}
 
@@ -60,6 +60,7 @@ func GetMock(feedsFile string, feedsBySecond int, currencies []string, httpPort 
 	go mock.ratesCollector()
 
 	http.HandleFunc("/get_curr_values_orders", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
 		curr := r.FormValue("curr")
 		info, _ := json.Marshal(&currOpsInfo{
@@ -134,7 +135,7 @@ func (mock *Mock) GetRange(curr string, from, to int64) []*CurrVal {
 	return mock.currencyValues[curr][fromPos:toPos]
 }
 
-func (mock *Mock) placeMarketOrder(inst string, units int, side string, price float64, realOps bool) (order *Order, err error) {
+func (mock *Mock) placeMarketOrder(inst string, units int, side string, price float64, realOps bool, ts int64) (order *Order, err error) {
 	// TODO Place market order
 	mock.mutex.Lock()
 	defer mock.mutex.Unlock()
@@ -148,26 +149,28 @@ func (mock *Mock) placeMarketOrder(inst string, units int, side string, price fl
 		Curr:  inst,
 		Type:  side,
 		Open:  true,
+		BuyTs: ts,
 	}
-	mock.ordersByCurr[inst] = append(mock.ordersByCurr[inst], mock.openOrders[orderID])
 
 	return mock.openOrders[orderID], nil
 }
 
-func (mock *Mock) Buy(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
-	return mock.placeMarketOrder(currency, units, "buy", bound, realOps)
+func (mock *Mock) Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
+	return mock.placeMarketOrder(currency, units, "buy", bound, realOps, ts)
 }
 
-func (mock *Mock) Sell(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
-	return mock.placeMarketOrder(currency, units, "sell", bound, realOps)
+func (mock *Mock) Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
+	return mock.placeMarketOrder(currency, units, "sell", bound, realOps, ts)
 }
 
-func (mock *Mock) CloseOrder(ord *Order) (err error) {
+func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
 	currVals := mock.currencyValues[ord.Curr]
 	ord.CloseRate = currVals[len(currVals)-1].Bid
-	ord.Profit = 1 - ord.CloseRate/ord.Price
+	ord.SellTs = ts
+	ord.Profit = ord.CloseRate/ord.Price - 1
 	log.Debug("Closed Order:", ord.Id, "With rate:", ord.CloseRate, "And Profit:", ord.Profit)
 	mock.mutex.Lock()
+	mock.ordersByCurr[ord.Curr] = append(mock.ordersByCurr[ord.Curr], ord)
 	delete(mock.openOrders, ord.Id)
 	mock.mutex.Unlock()
 
@@ -180,7 +183,7 @@ func (mock *Mock) CloseOrder(ord *Order) (err error) {
 
 func (mock *Mock) CloseAllOpenOrders() {
 	for ordId, _ := range mock.openOrders {
-		mock.CloseOrder(mock.openOrders[ordId])
+		mock.CloseOrder(mock.openOrders[ordId], 0)
 	}
 }
 
@@ -212,14 +215,14 @@ func (mock *Mock) ratesCollector() {
 		mock.mutexCurr[curr].Lock()
 		//log.Debug("New price for currency:", curr, "Bid:", feed.Bid, "Ask:", feed.Ask)
 		mock.currencyValues[curr] = append(mock.currencyValues[curr], &CurrVal{
-			Ts:  time.Now().UnixNano(),
+			Ts:  feed.Ts,
 			Bid: feed.Bid,
 			Ask: feed.Ask,
 		})
 
 		if listeners, ok := mock.listeners[curr]; ok {
 			for _, listener := range listeners {
-				go listener(curr)
+				go listener(curr, feed.Ts)
 			}
 		}
 		if len(mock.currencyValues[curr]) > MAX_RATES_TO_STORE {
@@ -235,10 +238,10 @@ func (mock *Mock) ratesCollector() {
 	}
 }
 
-func (mock *Mock) AddListerner(currency string, fn func(currency string)) {
+func (mock *Mock) AddListerner(currency string, fn func(currency string, ts int64)) {
 	mock.mutex.Lock()
 	if _, ok := mock.listeners[currency]; !ok {
-		mock.listeners[currency] = []func(currency string){}
+		mock.listeners[currency] = []func(currency string, ts int64){}
 	}
 	mock.listeners[currency] = append(mock.listeners[currency], fn)
 	mock.mutex.Unlock()

@@ -3,7 +3,6 @@ package hermes
 import (
 	"github.com/alonsovidales/v/charont"
 	"math"
-	"time"
 )
 
 type windowTrader struct {
@@ -17,9 +16,10 @@ type windowTrader struct {
 	opRunning           *charont.Order
 	unitsToUse          int
 	samplesToConsiderer int
+	maxSecToWait        int
 }
 
-func GetWindowTrader(curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer int) (wt *windowTrader) {
+func GetWindowTrader(curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
 	wt = &windowTrader{
 		collector:           collector,
 		windowSize:          windowSize,
@@ -27,6 +27,7 @@ func GetWindowTrader(curr string, windowSize int64, collector charont.Int, units
 		curr:                curr,
 		unitsToUse:          unitsToUse,
 		samplesToConsiderer: samplesToConsiderer,
+		maxSecToWait:        maxSecToWait,
 	}
 
 	collector.AddListerner(curr, wt.NewPrices)
@@ -34,8 +35,7 @@ func GetWindowTrader(curr string, windowSize int64, collector charont.Int, units
 	return
 }
 
-func (wt *windowTrader) NewPrices(curr string) {
-	ts := int64(time.Now().UnixNano())
+func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	rangeToStudy := wt.collector.GetRange(curr, ts-wt.windowSize, ts)
 
 	if len(rangeToStudy) < wt.samplesToConsiderer {
@@ -82,15 +82,16 @@ func (wt *windowTrader) NewPrices(curr string) {
 		lastAskPrice := rangeToStudy[len(rangeToStudy)-1].Ask
 		if lastAskPrice < avgValue && lastThrend > 0 {
 			//log.Debug("Buy:", len(rangeToStudy), rangeToStudy[len(rangeToStudy)-1].Ts, wt.curr)
-			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastAskPrice, wt.realOps)
+			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastAskPrice, wt.realOps, rangeToStudy[len(rangeToStudy)-1].Ts)
 		}
 	} else {
 		// Check if we can sell
 		lastSellPrice := rangeToStudy[len(rangeToStudy)-1].Bid
 		prevPrice := rangeToStudy[len(rangeToStudy)-2].Bid
-		if prevPrice == maxPrice && prevPrice > lastSellPrice {
-			err := wt.collector.CloseOrder(wt.opRunning)
-			if err != nil {
+		ts := rangeToStudy[len(rangeToStudy)-1].Ts
+		if prevPrice == maxPrice && prevPrice > lastSellPrice && (wt.opRunning.Price < lastSellPrice || (int(ts-wt.opRunning.BuyTs)/1000000000) > wt.maxSecToWait) {
+			err := wt.collector.CloseOrder(wt.opRunning, ts)
+			if err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				wt.opRunning = nil
 			}
@@ -123,11 +124,11 @@ func (wt *windowTrader) GetMicsecsBetweenOps(lastOps int) float64 {
 		toStudy = wt.ops[len(wt.ops)-lastOps:]
 	}
 
-	fromTs := toStudy[0].Ts
+	fromTs := toStudy[0].SellTs
 	distance := int64(0)
 	for _, op := range toStudy[1:] {
-		distance += op.Ts - fromTs
-		fromTs = op.Ts
+		distance += op.SellTs - fromTs
+		fromTs = op.SellTs
 	}
 
 	return (float64(distance) / float64(len(toStudy)-1))

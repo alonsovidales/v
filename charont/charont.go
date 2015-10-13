@@ -16,7 +16,8 @@ type Order struct {
 	Open      bool
 	Profit    float64
 	CloseRate float64
-	Ts        int64
+	BuyTs     int64
+	SellTs    int64
 }
 
 type CurrVal struct {
@@ -29,10 +30,10 @@ type Int interface {
 	GetBaseCurrency() string
 	GetCurrencies() []string
 	GetRange(currency string, from, to int64) []*CurrVal
-	AddListerner(currency string, fn func(currency string))
-	Buy(currency string, units int, bound float64, realOps bool) (order *Order, err error)
-	Sell(currency string, units int, bound float64, realOps bool) (order *Order, err error)
-	CloseOrder(ord *Order) (err error)
+	AddListerner(currency string, fn func(currency string, ts int64))
+	Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error)
+	Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error)
+	CloseOrder(ord *Order, ts int64) (err error)
 	CloseAllOpenOrders()
 }
 

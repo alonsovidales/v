@@ -63,7 +63,7 @@ type Oanda struct {
 	mutexCurr      map[string]*sync.Mutex
 	openOrders     map[int64]*Order
 	currLogsFile   *os.File
-	listeners      map[string][]func(currency string)
+	listeners      map[string][]func(currency string, ts int64)
 }
 
 func InitOandaApi(authToken string, accountId int, currencies []string, currLogsFile string) (api *Oanda, err error) {
@@ -73,7 +73,7 @@ func InitOandaApi(authToken string, accountId int, currencies []string, currLogs
 		authToken:  authToken,
 		currencies: currencies,
 		mutexCurr:  make(map[string]*sync.Mutex),
-		listeners:  make(map[string][]func(currency string)),
+		listeners:  make(map[string][]func(currency string, ts int64)),
 	}
 
 	if currLogsFile != "" {
@@ -230,15 +230,15 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 }
 
 // TODO: Implement the realOps flag
-func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
+func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
 	return api.placeMarketOrder(currency, units, "buy", bound)
 }
 
-func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool) (order *Order, err error) {
+func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
 	return api.placeMarketOrder(currency, units, "sell", bound)
 }
 
-func (api *Oanda) CloseOrder(ord *Order) (err error) {
+func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 	resp, err := api.doRequest("DELETE", fmt.Sprintf(CHECK_ORDER_URL, api.account.AccountId, ord.Id), nil)
 	if err != nil {
 		log.Error("Problem trying to close an open position, Error:", err)
@@ -259,7 +259,7 @@ func (api *Oanda) CloseOrder(ord *Order) (err error) {
 
 func (api *Oanda) CloseAllOpenOrders() {
 	for ordId, _ := range api.openOrders {
-		api.CloseOrder(api.openOrders[ordId])
+		api.CloseOrder(api.openOrders[ordId], time.Now().UnixNano())
 	}
 }
 
@@ -322,7 +322,7 @@ func (api *Oanda) ratesCollector() {
 
 				if listeners, ok := api.listeners[curr]; ok {
 					for _, listener := range listeners {
-						go listener(curr)
+						go listener(curr, time.Now().UnixNano())
 					}
 				}
 				if len(api.currencyValues[curr]) > MAX_RATES_TO_STORE {
@@ -336,10 +336,10 @@ func (api *Oanda) ratesCollector() {
 	}
 }
 
-func (api *Oanda) AddListerner(currency string, fn func(currency string)) {
+func (api *Oanda) AddListerner(currency string, fn func(currency string, ts int64)) {
 	api.mutex.Lock()
 	if _, ok := api.listeners[currency]; !ok {
-		api.listeners[currency] = []func(currency string){}
+		api.listeners[currency] = []func(currency string, ts int64){}
 	}
 	api.listeners[currency] = append(api.listeners[currency], fn)
 	api.mutex.Unlock()
