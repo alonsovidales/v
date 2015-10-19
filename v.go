@@ -6,6 +6,7 @@ import (
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/hades"
+	"github.com/alonsovidales/v/philoctetes"
 	"os"
 	"os/signal"
 	"runtime"
@@ -34,6 +35,12 @@ func main() {
 	var collector charont.Int
 	var err error
 
+	trainer := philoctetes.GetTrainer(
+		cfg.GetStr("trainer", "training-set"),
+		cfg.GetInt("trainer", "time-range-to-study"),
+		int(cfg.GetInt("trainer", "window-size")),
+	)
+
 	if runningMode != "train" {
 		collector, err = charont.InitOandaApi(
 			cfg.GetStr("oanda", "token"),
@@ -55,8 +62,10 @@ func main() {
 			int(cfg.GetInt("mock", "http-port")),
 		)
 	}
+
 	if runningMode != "collect" {
 		hades.GetHades(
+			trainer,
 			int(cfg.GetInt("traders-window", "total")),
 			int(cfg.GetInt("traders-window", "from-size")),
 			collector,

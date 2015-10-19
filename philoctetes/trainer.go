@@ -1,4 +1,4 @@
-package main
+package philoctetes
 
 /**
  * Info to get by currency:
@@ -13,36 +13,38 @@ import (
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 	"os"
-	"runtime"
+	"sort"
 	"strings"
 )
 
-const (
-	trainingFile         = "../test_data/20150907.log"
-	timeRangeToStudySecs = 3600 * 2 * 1000000000
-	windowSize           = 10
-	boundaryPerc         = 10
-)
-
-type result struct {
-	profitByTime float64
-	profit       float64
-	time         int64
-	threndOnBuy  float64
-	threndOnSell float64
-	averageBuy   float64
-	averageSell  float64
-	priceOnBuy   float64
-	priceOnSell  float64
+type Result struct {
+	ProfitByTime float64
+	Profit       float64
+	Time         int64
+	ThrendOnBuy  float64
+	ThrendOnSell float64
+	AverageBuy   float64
+	AverageSell  float64
+	PriceOnBuy   float64
+	PriceOnSell  float64
 }
 
-type feedsStr struct {
-	feeds map[string][]charont.CurrVal
+type resultsByCurrencyTy []*Result
+
+func (a resultsByCurrencyTy) Len() int           { return len(a) }
+func (a resultsByCurrencyTy) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a resultsByCurrencyTy) Less(i, j int) bool { return a[i].ProfitByTime > a[j].ProfitByTime }
+
+type Trainer struct {
+	feeds      map[string][]charont.CurrVal
+	results    map[string]resultsByCurrencyTy
+	windowSize int
 }
 
-func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
+func GetTrainer(trainingFile string, TimeRangeToStudySecs int64, windowSize int) (feeds *Trainer) {
+	log.Debug("Initializing trainer...")
 
+	TimeRangeToStudySecs *= 1000000000
 	feedsFile, err := os.Open(trainingFile)
 	if err != nil {
 		log.Fatal("Problem reading the logs file")
@@ -50,8 +52,9 @@ func main() {
 
 	scanner := bufio.NewScanner(feedsFile)
 
-	feeds := &feedsStr{
-		feeds: make(map[string][]charont.CurrVal),
+	feeds = &Trainer{
+		feeds:      make(map[string][]charont.CurrVal),
+		windowSize: windowSize,
 	}
 
 	i := 0
@@ -78,22 +81,26 @@ func main() {
 		}
 	}
 
-	feeds.studyCurrencies()
+	feeds.studyCurrencies(TimeRangeToStudySecs)
+
+	return
 }
 
-func (fd *feedsStr) studyCurrencies() {
+func (fd *Trainer) studyCurrencies(TimeRangeToStudySecs int64) {
 	log.Debug("Studing currencies...")
-	resultsByCurrency := make(map[string][]*result)
+	fd.results = make(map[string]resultsByCurrencyTy)
 	for curr, prices := range fd.feeds {
-		resultsByCurrency[curr] = []*result{}
+		fd.results[curr] = resultsByCurrencyTy{}
 		log.Debug("Studing currency:", curr)
 		for i, price := range prices {
 
+			// Calculate the threads and previous conditions before
+			// buy
 			threndOnBuy := 0.0
 			avgOnBuy := 0.0
 			first := true
 			var prevPrice charont.CurrVal
-			from := i - windowSize
+			from := i - fd.windowSize
 			if from < 0 {
 				from = 0
 			}
@@ -111,61 +118,79 @@ func (fd *feedsStr) studyCurrencies() {
 
 			maxBenef := 0.0
 			maxBenefPoint := 0
-			for j := i + 1; j < len(prices) && price.Ts+timeRangeToStudySecs > prices[j].Ts; j++ {
+			minBenef := 0.0
+			minBenefPoint := 0
+			for j := i + 1; j < len(prices) && price.Ts+TimeRangeToStudySecs > prices[j].Ts; j++ {
 				benef := prices[j].Bid/price.Ask - 1
+				if benef < 0 && minBenef > benef {
+					minBenef = benef
+					minBenefPoint = j
+				}
 				if benef > 0 && maxBenef < benef {
 					maxBenef = benef
 					maxBenefPoint = j
 				}
 			}
 
-			j := maxBenefPoint
-			benef := prices[j].Bid/price.Ask - 1
+			if minBenefPoint != 0 {
+				fd.addWindowInfo(curr, prices, price, minBenefPoint, threndOnBuy, avgOnBuy)
+				//log.Debug("MIN:", fd.results[curr][len(fd.results[curr])-1])
+			}
 			if maxBenefPoint != 0 {
-				rangeSecs := float64(prices[j].Ts-price.Ts) / 1000000000
-
-				//log.Debug("Benef in time:", curr, i, j, "Secs:", rangeSecs, "=", benef, "T:", benef/rangeSecs, price, prices[j])
-				// The benef by time is going to be the score
-
-				benefTime := benef / rangeSecs
-
-				threndOnSell := 0.0
-				avgOnSell := 0.0
-				first := true
-				var prevPrice charont.CurrVal
-				fromSell := j - windowSize
-				if fromSell < 0 {
-					fromSell = 0
-				}
-				windowRange := prices[fromSell:j]
-				for _, priceWindow := range windowRange {
-					avgOnSell += priceWindow.Bid
-					if !first {
-						threndOnSell += priceWindow.Bid / prevPrice.Bid
-						prevPrice = priceWindow
-					}
-					first = false
-				}
-				threndOnSell /= float64(len(windowRange) - 1)
-				avgOnSell /= float64(len(windowRange))
-
-				//log.Debug(benefTime)
-				resultsByCurrency[curr] = append(resultsByCurrency[curr], &result{
-					profit:       benef,
-					profitByTime: benefTime,
-					time:         int64(rangeSecs) * 1000000000,
-					priceOnBuy:   price.Ask,
-					priceOnSell:  prices[j].Bid,
-					threndOnBuy:  threndOnBuy,
-					averageBuy:   avgOnBuy,
-					threndOnSell: threndOnSell,
-					averageSell:  avgOnSell,
-				})
+				fd.addWindowInfo(curr, prices, price, maxBenefPoint, threndOnBuy, avgOnBuy)
+				//log.Debug("MAX:", fd.results[curr][len(fd.results[curr])-1])
 			}
 		}
 	}
 
-	for curr, values := range resultsByCurrency {
-		log.Debug("CURR:", curr, len(values))
+	for curr, values := range fd.results {
+		sort.Sort(values)
+		for _, v := range values[:10] {
+			log.Debug("CURR:", curr, v.ProfitByTime)
+		}
 	}
+}
+
+func (fd *Trainer) addWindowInfo(curr string, prices []charont.CurrVal, price charont.CurrVal, j int, threndOnBuy, avgOnBuy float64) {
+	benef := prices[j].Bid/price.Ask - 1
+	rangeSecs := float64(prices[j].Ts-price.Ts) / 1000000000
+
+	//log.Debug("Benef in Time:", curr, i, j, "Secs:", rangeSecs, "=", benef, "T:", benef/rangeSecs, price, prices[j])
+	// The benef by Time is going to be the score
+
+	benefTime := benef / rangeSecs
+
+	var prevPrice charont.CurrVal
+
+	threndOnSell := 0.0
+	avgOnSell := 0.0
+	first := true
+	fromSell := j - fd.windowSize
+	if fromSell < 0 {
+		fromSell = 0
+	}
+	windowRange := prices[fromSell:j]
+	for _, priceWindow := range windowRange {
+		avgOnSell += priceWindow.Bid
+		if !first {
+			threndOnSell += priceWindow.Bid / prevPrice.Bid
+			prevPrice = priceWindow
+		}
+		first = false
+	}
+	threndOnSell /= float64(len(windowRange) - 1)
+	avgOnSell /= float64(len(windowRange))
+
+	//log.Debug(benefTime)
+	fd.results[curr] = append(fd.results[curr], &Result{
+		Profit:       benef,
+		ProfitByTime: benefTime,
+		Time:         int64(rangeSecs) * 1000000000,
+		PriceOnBuy:   price.Ask,
+		PriceOnSell:  prices[j].Bid,
+		ThrendOnBuy:  threndOnBuy,
+		AverageBuy:   avgOnBuy,
+		ThrendOnSell: threndOnSell,
+		AverageSell:  avgOnSell,
+	})
 }

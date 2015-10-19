@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"github.com/alonsovidales/v/charont"
+	"github.com/alonsovidales/v/philoctetes"
 	"math"
 )
 
@@ -17,11 +18,13 @@ type windowTrader struct {
 	unitsToUse          int
 	samplesToConsiderer int
 	maxSecToWait        int
+	trainer             *philoctetes.Trainer
 }
 
-func GetWindowTrader(curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
+func GetWindowTrader(trainer *philoctetes.Trainer, curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
 	wt = &windowTrader{
 		collector:           collector,
+		trainer:             trainer,
 		windowSize:          windowSize,
 		realOps:             false,
 		curr:                curr,
