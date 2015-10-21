@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	//"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/philoctetes"
 	"math"
@@ -46,12 +47,10 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	}
 
 	//log.Debug("New price:", curr, "FromTs:", (ts-wt.windowSize)/1000000000, "ToTs:", ts/1000000000, "From:", rangeToStudy[0].Ts/1000000000, "To:", rangeToStudy[len(rangeToStudy)-1].Ts/1000000000, "Window Size:", wt.windowSize/1000000000, "Total:", len(rangeToStudy))
-	avgValue := 0.0
 	maxPrice := 0.0
 	minPrice := math.Inf(1)
 	for _, val := range rangeToStudy {
 		if wt.opRunning == nil {
-			avgValue += val.Ask
 			if maxPrice < val.Ask {
 				maxPrice = val.Ask
 			}
@@ -59,7 +58,6 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 				minPrice = val.Ask
 			}
 		} else {
-			avgValue += val.Bid
 			if maxPrice < val.Bid {
 				maxPrice = val.Bid
 			}
@@ -70,20 +68,22 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	}
 
 	lastThrend := 0.0
+	avgValue := 0.0
 	prevVal := 0.0
-	lastRange := rangeToStudy[len(rangeToStudy)-wt.samplesToConsiderer/2:]
-	for i, val := range lastRange {
+	for i, val := range rangeToStudy {
+		avgValue += val.Ask
 		if i != 0 {
-			lastThrend = val.Ask - prevVal
+			lastThrend += val.Ask / prevVal
 		}
 		prevVal = val.Ask
 	}
-	//lastThrend /= float64(len(lastRange)) - 1
+	lastThrend /= float64(len(rangeToStudy)) - 1
 	avgValue /= float64(len(rangeToStudy))
 	if wt.opRunning == nil {
 		// Check if we can buy
 		lastAskPrice := rangeToStudy[len(rangeToStudy)-1].Ask
-		if lastAskPrice < avgValue && lastThrend > 0 {
+
+		if wt.trainer.ShouldIBuy(curr, lastThrend, avgValue, lastAskPrice) {
 			//log.Debug("Buy:", len(rangeToStudy), rangeToStudy[len(rangeToStudy)-1].Ts, wt.curr)
 			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastAskPrice, wt.realOps, rangeToStudy[len(rangeToStudy)-1].Ts)
 		}
