@@ -174,11 +174,13 @@ func (fd *Trainer) studyCurrencies(TimeRangeToStudySecs int64) {
 			}
 
 			log.Debug("Trainig model for currency:", curr, "Buy:", len(fd.logRegModelsBuy[curr].X), len(fd.logRegModelsBuy[curr].Y), "Sell:", len(fd.logRegModelsSell[curr].X), len(fd.logRegModelsSell[curr].Y))
+			log.Debug("Trainig model for currency:", curr, "Buy:", fd.logRegModelsBuy[curr].X[0], fd.logRegModelsBuy[curr].Y[0], "Sell:", fd.logRegModelsSell[curr].X[0], fd.logRegModelsSell[curr].Y[0])
 			fd.logRegModelsSell[curr].InitializeTheta()
 			fd.logRegModelsBuy[curr].InitializeTheta()
-			ml.Fmincg(fd.logRegModelsSell[curr], 0.0, 1000, true)
-			ml.Fmincg(fd.logRegModelsBuy[curr], 0.0, 1000, true)
-			log.Debug("Model trained for currency:", curr)
+			ml.Fmincg(fd.logRegModelsSell[curr], 0.0, 100000, true)
+			ml.Fmincg(fd.logRegModelsBuy[curr], 0.0, 100000, true)
+			c, _, _ := fd.logRegModelsBuy[curr].CostFunction(0.0, false)
+			log.Debug("Model trained for currency:", curr, ":", c)
 
 			toFinish--
 		}(curr, prices)
@@ -192,7 +194,8 @@ func (fd *Trainer) studyCurrencies(TimeRangeToStudySecs int64) {
 func (fd *Trainer) GetInfoSection(prices []charont.CurrVal, ask bool) (thrend, avg, min, max, variance, covariance float64) {
 	var val, prev float64
 	points := float64(len(prices))
-	max = math.Inf(1)
+	min = math.Inf(1)
+	max = math.Inf(-1)
 
 	for i, p := range prices {
 		if ask {
