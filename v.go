@@ -2,16 +2,17 @@ package main
 
 import (
 	"fmt"
-	"github.com/alonsovidales/pit/cfg"
-	"github.com/alonsovidales/pit/log"
-	"github.com/alonsovidales/v/charont"
-	"github.com/alonsovidales/v/hades"
-	"github.com/alonsovidales/v/philoctetes"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
+
+	"github.com/alonsovidales/pit/cfg"
+	"github.com/alonsovidales/pit/log"
+	"github.com/alonsovidales/v/charont"
+	"github.com/alonsovidales/v/hades"
+	"github.com/alonsovidales/v/philoctetes"
 )
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 	var collector charont.Int
 	var err error
 
-	trainer := philoctetes.GetTrainer(
+	trainer := philoctetes.GetTrainerCuda(
 		cfg.GetStr("trainer", "training-set"),
 		cfg.GetInt("trainer", "time-range-to-study"),
 		int(cfg.GetInt("trainer", "window-size")),

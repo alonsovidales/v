@@ -2,9 +2,10 @@ package hermes
 
 import (
 	//"github.com/alonsovidales/pit/log"
+	"math"
+
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/philoctetes"
-	"math"
 )
 
 type windowTrader struct {
@@ -19,10 +20,10 @@ type windowTrader struct {
 	unitsToUse          int
 	samplesToConsiderer int
 	maxSecToWait        int
-	trainer             *philoctetes.Trainer
+	trainer             philoctetes.TrainerInt
 }
 
-func GetWindowTrader(trainer *philoctetes.Trainer, curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
+func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
 	wt = &windowTrader{
 		collector:           collector,
 		trainer:             trainer,

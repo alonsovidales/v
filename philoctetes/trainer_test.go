@@ -5,7 +5,7 @@ import (
 )
 
 func TestTrainer(t *testing.T) {
-	GetTrainer(
+	GetTrainerCuda(
 		"../test_data/training.log",
 		10,
 		3600*2,

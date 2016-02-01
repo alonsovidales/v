@@ -1,12 +1,13 @@
 package hades
 
 import (
+	"sort"
+	"time"
+
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/hermes"
 	"github.com/alonsovidales/v/philoctetes"
-	"sort"
-	"time"
 )
 
 type Hades struct {
@@ -28,7 +29,7 @@ func (a TradersSortener) Len() int           { return len(a) }
 func (a TradersSortener) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a TradersSortener) Less(i, j int) bool { return a[i].Score > a[j].Score }
 
-func GetHades(trainer *philoctetes.Trainer, traders int, from int, collector charont.Int, unitsToUse, samplesToConsiderer, lastOpsToConsider, tradesThatCanPlay, maxSecsToWait int) (hades *Hades) {
+func GetHades(trainer philoctetes.TrainerInt, traders int, from int, collector charont.Int, unitsToUse, samplesToConsiderer, lastOpsToConsider, tradesThatCanPlay, maxSecsToWait int) (hades *Hades) {
 	hades = &Hades{
 		traders:           make([]hermes.Int, traders),
 		collector:         collector,
