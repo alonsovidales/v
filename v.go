@@ -36,10 +36,14 @@ func main() {
 	var collector charont.Int
 	var err error
 
-	trainer := philoctetes.GetTrainerCuda(
+	/*trainer := philoctetes.GetTrainerCuda(
 		cfg.GetStr("trainer", "training-set"),
 		cfg.GetInt("trainer", "time-range-to-study"),
 		int(cfg.GetInt("trainer", "window-size")),
+	)*/
+	trainer := philoctetes.GetTrainerCorrelations(
+		cfg.GetStr("trainer", "training-set"),
+		cfg.GetInt("trainer", "time-range-to-study"),
 	)
 
 	if runningMode != "train" {
