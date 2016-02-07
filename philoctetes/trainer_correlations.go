@@ -14,13 +14,36 @@ import (
 
 const (
 	tsMultToSecs      = 1000000000
-	winSizeSecs       = 3600 * tsMultToSecs
+	winSizeSecs       = 900 * tsMultToSecs
 	minPointsInWindow = 1000
+	clusters          = 20
 )
 
 type TrainerCorrelations struct {
-	feeds map[string][]*charont.CurrVal
+	feeds           map[string][]*charont.CurrVal
+	centroidsCurr   map[string][][]float64
+	centroidsForAsk map[string]map[int]bool
 }
+
+type ScoreCounter struct {
+	val *charont.CurrVal
+	w   float64
+	d   float64
+
+	charAskMin  float64
+	charAskMax  float64
+	charAskMean float64
+	charAskMode float64
+
+	maxWin   float64
+	score    float64
+	centroid int
+}
+type ByScore []*ScoreCounter
+
+func (a ByScore) Len() int           { return len(a) }
+func (a ByScore) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByScore) Less(i, j int) bool { return a[i].score > a[j].score }
 
 func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) TrainerInt {
 	log.Debug("Initializing trainer...")
@@ -34,7 +57,9 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 	scanner := bufio.NewScanner(feedsFile)
 
 	feeds := &TrainerCorrelations{
-		feeds: make(map[string][]*charont.CurrVal),
+		feeds:           make(map[string][]*charont.CurrVal),
+		centroidsCurr:   make(map[string][][]float64),
+		centroidsForAsk: make(map[string]map[int]bool),
 	}
 
 	i := 0
@@ -66,24 +91,6 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 	return feeds
 }
 
-type ScoreCounter struct {
-	val *charont.CurrVal
-	w   float64
-	d   float64
-
-	charAskMin float64
-	charAskMax float64
-	charAskAvg float64
-
-	maxWin float64
-	score  float64
-}
-type ByScore []*ScoreCounter
-
-func (a ByScore) Len() int           { return len(a) }
-func (a ByScore) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByScore) Less(i, j int) bool { return a[i].score > a[j].score }
-
 func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 	log.Debug(len(tr.feeds["USD"]), tr.feeds["USD"][0])
 	valsForScore := make(map[string]ByScore)
@@ -97,12 +104,17 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		minMaxWin := [2]float64{math.Inf(1), math.Inf(-1)}
 		minMaxD := [2]float64{math.Inf(1), math.Inf(-1)}
 		minMaxW := [2]float64{math.Inf(1), math.Inf(-1)}
+		lastWindowFirstPosUsed := 0
 	pointToStudyLoop:
 		for i, val := range vals {
-			charAskMin, charAskMax, charAskAvg, noPossibleToStudy := tr.getPointCharacteristics(val, vals[:i])
+			if i%1000 == 0 {
+				log.Debug("Processed:", i, "points for currency:", curr)
+			}
+			charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, firstWindowPos := tr.getPointCharacteristics(val, vals[lastWindowFirstPosUsed:i])
 			if noPossibleToStudy {
 				continue pointToStudyLoop
 			}
+			lastWindowFirstPosUsed = firstWindowPos
 
 			found := int64(-1)
 			w := -1.0
@@ -137,9 +149,10 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 						d:      dFlo,
 						maxWin: maxWinFlo,
 
-						charAskMin: charAskMin,
-						charAskMax: charAskMax,
-						charAskAvg: charAskAvg,
+						charAskMin:  charAskMin,
+						charAskMax:  charAskMax,
+						charAskMean: charAskMean,
+						charAskMode: charAskMode,
 					})
 
 					if w < minMaxW[0] {
@@ -169,9 +182,10 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 					d:      1,
 					maxWin: 0,
 
-					charAskMin: charAskMin,
-					charAskMax: charAskMax,
-					charAskAvg: charAskAvg,
+					charAskMin:  charAskMin,
+					charAskMax:  charAskMax,
+					charAskMean: charAskMean,
+					charAskMode: charAskMode,
 				})
 			}
 		}
@@ -203,29 +217,137 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		//  - Don't buy
 		// Identify what centroid is what
 		// Check the Precission and recall obtained using this 2 centroids
+
+		// Init the clusters centroids
+		log.Debug("Moving centroids")
+		for c := 0; c < clusters; c++ {
+			pos := c * (len(valsForScore[curr]) / (clusters - 1))
+			tr.centroidsCurr[curr] = append(tr.centroidsCurr[curr], []float64{
+				valsForScore[curr][pos].charAskMin,  // ask min relation
+				valsForScore[curr][pos].charAskMax,  // ask max relation
+				valsForScore[curr][pos].charAskMean, // ask mean relation
+				valsForScore[curr][pos].charAskMode, // ask mode relation
+			})
+		}
+
+		modified := true
+		for modified {
+			scoresByCentroid := make([][]*ScoreCounter, clusters)
+			for _, score := range valsForScore[curr] {
+				centroid := tr.getClosestCentroid(score, curr)
+				scoresByCentroid[centroid] = append(scoresByCentroid[centroid], score)
+			}
+
+			for i := 0; i < clusters; i++ {
+				log.Debug("Items centroid:", i, len(scoresByCentroid[i]))
+			}
+
+			// Move the centroids
+			modified = false
+			for c := 0; c < clusters; c++ {
+				log.Debug("scoresByCentroid:", c, len(scoresByCentroid[c]))
+				oldCentroid := tr.centroidsCurr[curr][c]
+				tr.centroidsCurr[curr][c] = []float64{
+					0.0,
+					0.0,
+					0.0,
+					0.0,
+				}
+				scoresCentroid := float64(len(scoresByCentroid[c]))
+				for _, score := range scoresByCentroid[c] {
+					tr.centroidsCurr[curr][c][0] += score.charAskMin / scoresCentroid
+					tr.centroidsCurr[curr][c][1] += score.charAskMax / scoresCentroid
+					tr.centroidsCurr[curr][c][2] += score.charAskMean / scoresCentroid
+					tr.centroidsCurr[curr][c][3] += score.charAskMode / scoresCentroid
+				}
+
+				// Check if the centroid was moved or not
+				for i := 0; i < len(oldCentroid); i++ {
+					if oldCentroid[i] != tr.centroidsCurr[curr][c][i] {
+						modified = true
+					}
+				}
+				log.Debug("Centroids:", c, oldCentroid, tr.centroidsCurr[curr][c])
+			}
+		}
+
+		// With the clsters initted, try to estimate the score by centroid
+		avgScoreCent := make([]float64, clusters)
+		scoresByCentroid := make([]int, clusters)
+		for _, score := range valsForScore[curr] {
+			centroid := tr.getClosestCentroid(score, curr)
+			avgScoreCent[centroid] += score.score
+			scoresByCentroid[centroid]++
+		}
+		maxScoreCentroid := -1.0
+		centroidToUse := 0
+		for c := 0; c < clusters; c++ {
+			log.Debug("Centroid:", c, "Items:", scoresByCentroid[c], "Score", avgScoreCent[c]/float64(scoresByCentroid[c]), "CentroidPos:", tr.centroidsCurr[curr][c])
+			if maxScoreCentroid < avgScoreCent[c]/float64(scoresByCentroid[c]) {
+				maxScoreCentroid = avgScoreCent[c] / float64(scoresByCentroid[c])
+				centroidToUse = c
+			}
+		}
+
+		log.Debug("Centroid to use:", centroidToUse)
+
+		tr.centroidsForAsk[curr] = map[int]bool{
+			centroidToUse: true,
+		}
 	}
 }
 
+func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, curr string) (c int) {
+	c = 0
+	minDist := math.Inf(1)
+	for ci, centroid := range tr.centroidsCurr[curr] {
+		distToCentroid := (score.charAskMin - centroid[0]) * (score.charAskMin - centroid[0])
+		distToCentroid += (score.charAskMax - centroid[1]) * (score.charAskMax - centroid[1])
+		distToCentroid += (score.charAskMean - centroid[2]) * (score.charAskMean - centroid[2])
+		distToCentroid += (score.charAskMode - centroid[3]) * (score.charAskMode - centroid[3])
+		log.Debug("Dist To cent:", curr, score, ci, centroid, distToCentroid)
+		if distToCentroid < minDist {
+			minDist = distToCentroid
+			c = ci
+		}
+	}
+	log.Debug("Centroid to use:", c)
+
+	return
+}
+
 func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, vals []*charont.CurrVal) bool {
-	/*charAskMin, charAskMax, charAskAvg, noPossibleToStudy := tr.getPointCharacteristics(val, vals)
+	charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, _ := tr.getPointCharacteristics(val, vals)
 	if !noPossibleToStudy {
 		return false
-	}*/
+	}
 
-	return true
+	centroid := tr.getClosestCentroid(&ScoreCounter{
+		val:         val,
+		charAskMin:  charAskMin,
+		charAskMax:  charAskMax,
+		charAskMean: charAskMean,
+		charAskMode: charAskMode,
+	}, curr)
+
+	_, ok := tr.centroidsForAsk[curr][centroid]
+
+	return ok
 }
 
 func (tr *TrainerCorrelations) ShouldISell(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal) bool {
-	return true
+	return askVal.Ask < currVal.Bid && vals[len(vals)-1].Bid > currVal.Bid
 }
 
-func (tr *TrainerCorrelations) getPointCharacteristics(val *charont.CurrVal, vals []*charont.CurrVal) (charAskMin, charAskMax, charAskAvg float64, noPossibleToStudy bool) {
+func (tr *TrainerCorrelations) getPointCharacteristics(val *charont.CurrVal, vals []*charont.CurrVal) (charAskMin, charAskMax, charAskMean, charAskMode float64, noPossibleToStudy bool, firstWindowPos int) {
 	// Get all the previous points inside the defined
 	// window size that will define this point:
-	pointsInRange := []*charont.CurrVal{}
-	for _, winVal := range vals {
+	var pointsInRange []*charont.CurrVal
+
+	for i, winVal := range vals {
 		if val.Ts-winVal.Ts >= winSizeSecs {
-			pointsInRange = append(pointsInRange, winVal)
+			pointsInRange = vals[i:]
+			firstWindowPos = i
 		}
 	}
 	if len(pointsInRange) < minPointsInWindow {
@@ -235,21 +357,36 @@ func (tr *TrainerCorrelations) getPointCharacteristics(val *charont.CurrVal, val
 	noPossibleToStudy = false
 
 	minMaxAsk := [2]float64{math.Inf(1), math.Inf(-1)}
-	avgValAsk := 0.0
+	meanValAsk := 0.0
+	modeValAsk := make(map[float64]int)
 	for _, point := range pointsInRange {
-		avgValAsk += point.Ask
+		meanValAsk += point.Ask
 		if point.Ask > minMaxAsk[1] {
 			minMaxAsk[1] = point.Ask
 		}
 		if point.Ask < minMaxAsk[0] {
 			minMaxAsk[0] = point.Ask
 		}
+
+		if _, ok := modeValAsk[point.Ask]; ok {
+			modeValAsk[point.Ask]++
+		} else {
+			modeValAsk[point.Ask] = 0
+		}
 	}
-	avgValAsk /= float64(len(pointsInRange))
+	maxTimes := 0
+	for ask, times := range modeValAsk {
+		if maxTimes < times {
+			charAskMode = ask
+			maxTimes = times
+		}
+	}
+	meanValAsk /= float64(len(pointsInRange))
 
 	charAskMin = val.Ask / minMaxAsk[0]
 	charAskMax = val.Ask / minMaxAsk[1]
-	charAskAvg = val.Ask / avgValAsk
+	charAskMean = val.Ask / meanValAsk
+	charAskMode = val.Ask / charAskMode
 
 	return
 }
