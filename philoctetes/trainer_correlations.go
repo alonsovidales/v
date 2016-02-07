@@ -3,7 +3,6 @@ package philoctetes
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"sort"
@@ -13,14 +12,20 @@ import (
 	"github.com/alonsovidales/v/charont"
 )
 
+const (
+	tsMultToSecs      = 1000000000
+	winSizeSecs       = 3600 * tsMultToSecs
+	minPointsInWindow = 1000
+)
+
 type TrainerCorrelations struct {
-	feeds map[string][]charont.CurrVal
+	feeds map[string][]*charont.CurrVal
 }
 
 func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) TrainerInt {
 	log.Debug("Initializing trainer...")
 
-	TimeRangeToStudySecs *= 1000000000
+	TimeRangeToStudySecs *= tsMultToSecs
 	feedsFile, err := os.Open(trainingFile)
 	if err != nil {
 		log.Fatal("Problem reading the logs file")
@@ -29,12 +34,12 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 	scanner := bufio.NewScanner(feedsFile)
 
 	feeds := &TrainerCorrelations{
-		feeds: make(map[string][]charont.CurrVal),
+		feeds: make(map[string][]*charont.CurrVal),
 	}
 
 	i := 0
 	for {
-		var feed charont.CurrVal
+		var feed *charont.CurrVal
 
 		if !scanner.Scan() {
 			break
@@ -47,7 +52,7 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 		}
 
 		if _, ok := feeds.feeds[curr]; !ok {
-			feeds.feeds[curr] = []charont.CurrVal{}
+			feeds.feeds[curr] = []*charont.CurrVal{}
 		}
 		feeds.feeds[curr] = append(feeds.feeds[curr], feed)
 		i++
@@ -62,9 +67,14 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 }
 
 type ScoreCounter struct {
-	val    charont.CurrVal
-	w      float64
-	d      float64
+	val *charont.CurrVal
+	w   float64
+	d   float64
+
+	charAskMin float64
+	charAskMax float64
+	charAskAvg float64
+
 	maxWin float64
 	score  float64
 }
@@ -79,11 +89,21 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 	valsForScore := make(map[string]ByScore)
 
 	for curr, vals := range tr.feeds {
+		if curr != "USD" {
+			continue
+		}
+
 		valsForScore[curr] = ByScore{}
 		minMaxWin := [2]float64{math.Inf(1), math.Inf(-1)}
 		minMaxD := [2]float64{math.Inf(1), math.Inf(-1)}
 		minMaxW := [2]float64{math.Inf(1), math.Inf(-1)}
+	pointToStudyLoop:
 		for i, val := range vals {
+			charAskMin, charAskMax, charAskAvg, noPossibleToStudy := tr.getPointCharacteristics(val, vals[:i])
+			if noPossibleToStudy {
+				continue pointToStudyLoop
+			}
+
 			found := int64(-1)
 			w := -1.0
 			maxWin := -1.0
@@ -116,6 +136,10 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 						w:      w,
 						d:      dFlo,
 						maxWin: maxWinFlo,
+
+						charAskMin: charAskMin,
+						charAskMax: charAskMax,
+						charAskAvg: charAskAvg,
 					})
 
 					if w < minMaxW[0] {
@@ -144,6 +168,10 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 					w:      0,
 					d:      1,
 					maxWin: 0,
+
+					charAskMin: charAskMin,
+					charAskMax: charAskMax,
+					charAskAvg: charAskAvg,
 				})
 			}
 		}
@@ -165,21 +193,63 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		}
 
 		sort.Sort(valsForScore[curr])
-		fmt.Println(scoresUsed, len(valsForScore[curr]))
+		log.Debug("Total Positive Scores", scoresUsed, "Total points:", len(valsForScore[curr]))
 		for _, score := range valsForScore[curr][:10] {
-			fmt.Println(curr, score)
+			log.Debug("Curr:", curr, "Score:", score)
 		}
+
+		// Using k-means try to find 2 centroids:
+		//  - Buy
+		//  - Don't buy
+		// Identify what centroid is what
+		// Check the Precission and recall obtained using this 2 centroids
 	}
 }
 
-func (tr *TrainerCorrelations) GetInfoSection(prices []charont.CurrVal, ask bool) (thrend, avg, min, max, variance, covariance float64) {
-	return
-}
+func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, vals []*charont.CurrVal) bool {
+	/*charAskMin, charAskMax, charAskAvg, noPossibleToStudy := tr.getPointCharacteristics(val, vals)
+	if !noPossibleToStudy {
+		return false
+	}*/
 
-func (tr *TrainerCorrelations) ShouldIBuy(curr string, threndOnBuy, averageBuy, priceOnBuy float64) bool {
 	return true
 }
 
-func (tr *TrainerCorrelations) GetPredictionToSell(Profit float64, Time int64, ThrendOnBuy, ThrendOnSell, AverageBuy, AverageSell, PriceOnBuy, PriceOnSell float64) (pred float64) {
+func (tr *TrainerCorrelations) ShouldISell(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal) bool {
+	return true
+}
+
+func (tr *TrainerCorrelations) getPointCharacteristics(val *charont.CurrVal, vals []*charont.CurrVal) (charAskMin, charAskMax, charAskAvg float64, noPossibleToStudy bool) {
+	// Get all the previous points inside the defined
+	// window size that will define this point:
+	pointsInRange := []*charont.CurrVal{}
+	for _, winVal := range vals {
+		if val.Ts-winVal.Ts >= winSizeSecs {
+			pointsInRange = append(pointsInRange, winVal)
+		}
+	}
+	if len(pointsInRange) < minPointsInWindow {
+		noPossibleToStudy = true
+		return
+	}
+	noPossibleToStudy = false
+
+	minMaxAsk := [2]float64{math.Inf(1), math.Inf(-1)}
+	avgValAsk := 0.0
+	for _, point := range pointsInRange {
+		avgValAsk += point.Ask
+		if point.Ask > minMaxAsk[1] {
+			minMaxAsk[1] = point.Ask
+		}
+		if point.Ask < minMaxAsk[0] {
+			minMaxAsk[0] = point.Ask
+		}
+	}
+	avgValAsk /= float64(len(pointsInRange))
+
+	charAskMin = val.Ask / minMaxAsk[0]
+	charAskMax = val.Ask / minMaxAsk[1]
+	charAskAvg = val.Ask / avgValAsk
+
 	return
 }

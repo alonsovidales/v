@@ -246,7 +246,3 @@ func (fd *TrainerCuda) ShouldIBuy(curr string, threndOnBuy, averageBuy, priceOnB
 	//return hip > 0.5
 	return false
 }
-
-func (fd *TrainerCuda) GetPredictionToSell(Profit float64, Time int64, ThrendOnBuy, ThrendOnSell, AverageBuy, AverageSell, PriceOnBuy, PriceOnSell float64) (pred float64) {
-	return
-}

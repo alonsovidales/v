@@ -2,8 +2,8 @@ package hermes
 
 import (
 	//"github.com/alonsovidales/pit/log"
-	"math"
 
+	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/philoctetes"
 )
@@ -41,61 +41,27 @@ func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, windowSize int
 }
 
 func (wt *windowTrader) NewPrices(curr string, ts int64) {
-	rangeToStudy := wt.collector.GetRange(curr, ts-wt.windowSize, ts)
+	//rangeToStudy := wt.collector.GetRange(curr, ts-wt.windowSize, ts)
+	var askVal *charont.CurrVal
+	rangeToStudy := wt.collector.GetRange(curr, 0, ts)
 
 	if len(rangeToStudy) < wt.samplesToConsiderer {
 		return
 	}
 
-	//log.Debug("New price:", curr, "FromTs:", (ts-wt.windowSize)/1000000000, "ToTs:", ts/1000000000, "From:", rangeToStudy[0].Ts/1000000000, "To:", rangeToStudy[len(rangeToStudy)-1].Ts/1000000000, "Window Size:", wt.windowSize/1000000000, "Total:", len(rangeToStudy))
-	maxPrice := 0.0
-	minPrice := math.Inf(1)
-	for _, val := range rangeToStudy {
-		if wt.opRunning == nil {
-			if maxPrice < val.Ask {
-				maxPrice = val.Ask
-			}
-			if minPrice > val.Ask {
-				minPrice = val.Ask
-			}
-		} else {
-			if maxPrice < val.Bid {
-				maxPrice = val.Bid
-			}
-			if minPrice > val.Bid {
-				minPrice = val.Bid
-			}
-		}
-	}
+	log.Debug("New price:", curr, "FromTs:", (ts-wt.windowSize)/1000000000, "ToTs:", ts/1000000000, "From:", rangeToStudy[0].Ts/1000000000, "To:", rangeToStudy[len(rangeToStudy)-1].Ts/1000000000, "Window Size:", wt.windowSize/1000000000, "Total:", len(rangeToStudy))
 
-	lastThrend := 0.0
-	avgValue := 0.0
-	prevVal := 0.0
-	for i, val := range rangeToStudy {
-		avgValue += val.Ask
-		if i != 0 {
-			lastThrend += val.Ask / prevVal
-		}
-		prevVal = val.Ask
-	}
-	lastThrend /= float64(len(rangeToStudy)) - 1
-	avgValue /= float64(len(rangeToStudy))
 	if wt.opRunning == nil {
 		// Check if we can buy
-		lastAskPrice := rangeToStudy[len(rangeToStudy)-1].Ask
-
-		if wt.trainer.ShouldIBuy(curr, lastThrend, avgValue, lastAskPrice) {
+		if wt.trainer.ShouldIBuy(curr, rangeToStudy[len(rangeToStudy)-1], rangeToStudy[:len(rangeToStudy)-1]) {
 			//log.Debug("Buy:", len(rangeToStudy), rangeToStudy[len(rangeToStudy)-1].Ts, wt.curr)
-			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastAskPrice, wt.realOps, rangeToStudy[len(rangeToStudy)-1].Ts)
+			askVal = rangeToStudy[len(rangeToStudy)-1]
+			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, askVal.Ask, wt.realOps, rangeToStudy[len(rangeToStudy)-1].Ts)
 		}
 	} else {
 		// Check if we can sell
-		lastSellPrice := rangeToStudy[len(rangeToStudy)-1].Bid
-		prevPrice := rangeToStudy[len(rangeToStudy)-2].Bid
-		ts := rangeToStudy[len(rangeToStudy)-1].Ts
-		if prevPrice == maxPrice && prevPrice > lastSellPrice && (wt.opRunning.Price < lastSellPrice || (int(ts-wt.opRunning.BuyTs)/1000000000) > wt.maxSecToWait) {
-			err := wt.collector.CloseOrder(wt.opRunning, ts)
-			if err == nil {
+		if wt.trainer.ShouldISell(curr, rangeToStudy[len(rangeToStudy)-1], askVal, rangeToStudy[:len(rangeToStudy)-1]) {
+			if err := wt.collector.CloseOrder(wt.opRunning, ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				wt.opRunning = nil
 			}
