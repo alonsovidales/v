@@ -198,6 +198,7 @@ func (mock *Mock) ratesCollector() {
 	mock.mutex.Unlock()
 
 	scanner := bufio.NewScanner(mock.currLogsFile)
+	scanner.Scan()
 	log.Info("Parsing currencies from the mock file...")
 
 	c := time.Tick(time.Duration(1000/mock.feedsBySecond) * time.Millisecond)
@@ -214,7 +215,6 @@ func (mock *Mock) ratesCollector() {
 			continue
 		}
 
-		log.Debug("Locking:", curr)
 		mock.mutexCurr[curr].Lock()
 		//log.Debug("New price for currency:", curr, "Bid:", feed.Bid, "Ask:", feed.Ask)
 		mock.currencyValues[curr] = append(mock.currencyValues[curr], &CurrVal{

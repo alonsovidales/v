@@ -14,7 +14,7 @@ import (
 
 const (
 	tsMultToSecs      = 1000000000
-	winSizeSecs       = 900 * tsMultToSecs
+	winSizeSecs       = 7200 * tsMultToSecs
 	minPointsInWindow = 1000
 	clusters          = 20
 )
@@ -111,10 +111,12 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 				log.Debug("Processed:", i, "points for currency:", curr)
 			}
 			charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, firstWindowPos := tr.getPointCharacteristics(val, vals[lastWindowFirstPosUsed:i])
+			//log.Debug("Study - Val:", val, "lastWindowFirstPosUsed:", lastWindowFirstPosUsed, "Vals:", len(vals[lastWindowFirstPosUsed:i]), charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, firstWindowPos)
 			if noPossibleToStudy {
+				log.Debug("No study, no possible")
 				continue pointToStudyLoop
 			}
-			lastWindowFirstPosUsed = firstWindowPos
+			lastWindowFirstPosUsed += firstWindowPos
 
 			found := int64(-1)
 			w := -1.0
@@ -289,7 +291,7 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 			}
 		}
 
-		log.Debug("Centroid to use:", centroidToUse)
+		log.Debug("Centroid to use as master:", centroidToUse)
 
 		tr.centroidsForAsk[curr] = map[int]bool{
 			centroidToUse: true,
@@ -305,13 +307,12 @@ func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, curr stri
 		distToCentroid += (score.charAskMax - centroid[1]) * (score.charAskMax - centroid[1])
 		distToCentroid += (score.charAskMean - centroid[2]) * (score.charAskMean - centroid[2])
 		distToCentroid += (score.charAskMode - centroid[3]) * (score.charAskMode - centroid[3])
-		log.Debug("Dist To cent:", curr, score, ci, centroid, distToCentroid)
+		//log.Debug("Dist To cent:", curr, score, ci, centroid, distToCentroid)
 		if distToCentroid < minDist {
 			minDist = distToCentroid
 			c = ci
 		}
 	}
-	log.Debug("Centroid to use:", c)
 
 	return
 }
@@ -322,6 +323,8 @@ func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, val
 		return false
 	}
 
+	log.Debug("Val:", val, "Vals:", len(vals))
+
 	centroid := tr.getClosestCentroid(&ScoreCounter{
 		val:         val,
 		charAskMin:  charAskMin,
@@ -329,6 +332,7 @@ func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, val
 		charAskMean: charAskMean,
 		charAskMode: charAskMode,
 	}, curr)
+	log.Debug("Point chars - charAskMin:", charAskMin, "charAskMax:", charAskMax, "charAskMean:", charAskMean, "charAskMode:", charAskMode, "Centroid:", centroid)
 
 	_, ok := tr.centroidsForAsk[curr][centroid]
 
@@ -348,6 +352,8 @@ func (tr *TrainerCorrelations) getPointCharacteristics(val *charont.CurrVal, val
 		if val.Ts-winVal.Ts >= winSizeSecs {
 			pointsInRange = vals[i:]
 			firstWindowPos = i
+		} else {
+			break
 		}
 	}
 	if len(pointsInRange) < minPointsInWindow {

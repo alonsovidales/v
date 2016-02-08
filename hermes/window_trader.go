@@ -13,7 +13,6 @@ type windowTrader struct {
 
 	collector           charont.Int
 	curr                string
-	windowSize          int64
 	ops                 []*charont.Order
 	realOps             bool
 	opRunning           *charont.Order
@@ -23,11 +22,10 @@ type windowTrader struct {
 	trainer             philoctetes.TrainerInt
 }
 
-func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, windowSize int64, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
+func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
 	wt = &windowTrader{
 		collector:           collector,
 		trainer:             trainer,
-		windowSize:          windowSize,
 		realOps:             false,
 		curr:                curr,
 		unitsToUse:          unitsToUse,
@@ -41,26 +39,24 @@ func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, windowSize int
 }
 
 func (wt *windowTrader) NewPrices(curr string, ts int64) {
-	//rangeToStudy := wt.collector.GetRange(curr, ts-wt.windowSize, ts)
-	var askVal *charont.CurrVal
 	rangeToStudy := wt.collector.GetRange(curr, 0, ts)
 
 	if len(rangeToStudy) < wt.samplesToConsiderer {
 		return
 	}
 
-	log.Debug("New price:", curr, "FromTs:", (ts-wt.windowSize)/1000000000, "ToTs:", ts/1000000000, "From:", rangeToStudy[0].Ts/1000000000, "To:", rangeToStudy[len(rangeToStudy)-1].Ts/1000000000, "Window Size:", wt.windowSize/1000000000, "Total:", len(rangeToStudy))
+	lastVal := rangeToStudy[len(rangeToStudy)-1]
+	log.Debug("New price:", curr, "Ask:", lastVal.Ask, "Bid:", lastVal.Bid, "Total Prices:", len(rangeToStudy))
 
 	if wt.opRunning == nil {
 		// Check if we can buy
-		if wt.trainer.ShouldIBuy(curr, rangeToStudy[len(rangeToStudy)-1], rangeToStudy[:len(rangeToStudy)-1]) {
-			//log.Debug("Buy:", len(rangeToStudy), rangeToStudy[len(rangeToStudy)-1].Ts, wt.curr)
-			askVal = rangeToStudy[len(rangeToStudy)-1]
-			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, askVal.Ask, wt.realOps, rangeToStudy[len(rangeToStudy)-1].Ts)
+		if wt.trainer.ShouldIBuy(curr, lastVal, rangeToStudy[:len(rangeToStudy)-1]) {
+			log.Debug("Buy:", curr, lastVal.Ask, rangeToStudy[:len(rangeToStudy)-1])
+			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
 		}
 	} else {
 		// Check if we can sell
-		if wt.trainer.ShouldISell(curr, rangeToStudy[len(rangeToStudy)-1], askVal, rangeToStudy[:len(rangeToStudy)-1]) {
+		if wt.trainer.ShouldISell(curr, lastVal, lastVal, rangeToStudy[:len(rangeToStudy)-1]) {
 			if err := wt.collector.CloseOrder(wt.opRunning, ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				wt.opRunning = nil

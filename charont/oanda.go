@@ -3,7 +3,6 @@ package charont
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/alonsovidales/pit/log"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -11,10 +10,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/alonsovidales/pit/log"
 )
 
 const (
-	MAX_RATES_TO_STORE        = 10000
+	MAX_RATES_TO_STORE        = 100000
 	COLLECT_BY_SECOND         = 3
 	FAKE_GENERATE_ACCOUNT_URL = "https://api-fxpractice.oanda.com/v1/accounts"
 	ACCOUNT_INFO_URL          = "https://api-fxpractice.oanda.com/v1/accounts/"
