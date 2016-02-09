@@ -20,6 +20,7 @@ type windowTrader struct {
 	samplesToConsiderer int
 	maxSecToWait        int
 	trainer             philoctetes.TrainerInt
+	askVal              *charont.CurrVal
 }
 
 func GetWindowTrader(trainer philoctetes.TrainerInt, curr string, collector charont.Int, unitsToUse, samplesToConsiderer, maxSecToWait int) (wt *windowTrader) {
@@ -51,12 +52,13 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	if wt.opRunning == nil {
 		// Check if we can buy
 		if wt.trainer.ShouldIBuy(curr, lastVal, rangeToStudy[:len(rangeToStudy)-1]) {
-			log.Debug("Buy:", curr, lastVal.Ask, rangeToStudy[:len(rangeToStudy)-1])
+			log.Debug("Buy:", curr, lastVal.Ask)
 			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
+			wt.askVal = lastVal
 		}
 	} else {
 		// Check if we can sell
-		if wt.trainer.ShouldISell(curr, lastVal, lastVal, rangeToStudy[:len(rangeToStudy)-1]) {
+		if wt.trainer.ShouldISell(curr, lastVal, wt.askVal, rangeToStudy[:len(rangeToStudy)-1]) {
 			if err := wt.collector.CloseOrder(wt.opRunning, ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				wt.opRunning = nil
