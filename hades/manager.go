@@ -31,7 +31,7 @@ func (a TradersSortener) Less(i, j int) bool { return a[i].Score > a[j].Score }
 
 func GetHades(trainer philoctetes.TrainerInt, traders int, from int, collector charont.Int, unitsToUse, samplesToConsiderer, lastOpsToConsider, tradesThatCanPlay, maxSecsToWait int) (hades *Hades) {
 	hades = &Hades{
-		traders:           make([]hermes.Int, traders*len(collector.GetCurrencies())),
+		traders:           make([]hermes.Int, philoctetes.ClustersToUse*len(collector.GetCurrencies())),
 		collector:         collector,
 		tradesThatCanPlay: tradesThatCanPlay,
 		lastOpsToConsider: lastOpsToConsider,
@@ -39,8 +39,8 @@ func GetHades(trainer philoctetes.TrainerInt, traders int, from int, collector c
 	}
 
 	for i, curr := range collector.GetCurrencies() {
-		for t := 0; t < traders; t++ {
-			hades.traders[i+t] = hermes.GetWindowTrader(trainer, curr, collector, unitsToUse, samplesToConsiderer, maxSecsToWait)
+		for t := 0; t < philoctetes.ClustersToUse; t++ {
+			hades.traders[i+t] = hermes.GetWindowTrader(t, trainer, curr, collector, unitsToUse, samplesToConsiderer, maxSecsToWait)
 		}
 	}
 
