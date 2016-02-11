@@ -17,8 +17,8 @@ const (
 	winSizeSecs              = 7200 * tsMultToSecs
 	minPointsInWindow        = 1000
 	clusters                 = 20
-	ClustersToUse            = 5
-	secsToWaitUntilForceSell = 3600 * 6
+	ClustersToUse            = 10
+	secsToWaitUntilForceSell = 3600 * 3
 )
 
 type TrainerCorrelations struct {
@@ -38,8 +38,9 @@ type ScoreCounter struct {
 	charAskMean float64
 	charAskMode float64
 
-	maxWin float64
-	score  float64
+	maxWin       float64
+	maxWinNoNorm float64
+	score        float64
 }
 type ByScore []*ScoreCounter
 
@@ -52,6 +53,7 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 
 	TimeRangeToStudySecs *= tsMultToSecs
 	feedsFile, err := os.Open(trainingFile)
+	log.Debug("File:", trainingFile)
 	if err != nil {
 		log.Fatal("Problem reading the logs file")
 	}
@@ -126,7 +128,7 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		winningRangStudy:
 			for _, futureVal := range vals[i+1:] {
 				currWin := futureVal.Bid / val.Ask
-				if currWin > 1 && currWin > maxWin {
+				if currWin > maxWin {
 					maxWin = futureVal.Bid / val.Ask
 				}
 
@@ -148,10 +150,11 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 					//log.Debug("New Range:", curr, w/1000000000, float64(found-val.Ts)/1000000000, maxWin)
 					dFlo := float64(found - val.Ts)
 					valsForScore[curr] = append(valsForScore[curr], &ScoreCounter{
-						val:    val,
-						w:      w,
-						d:      dFlo,
-						maxWin: maxWinFlo,
+						val:          val,
+						w:            w,
+						d:            dFlo,
+						maxWin:       maxWinFlo,
+						maxWinNoNorm: maxWinFlo,
 
 						charAskMin:  charAskMin,
 						charAskMax:  charAskMax,
@@ -181,10 +184,11 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 			} else {
 				// This is a bad point, we need to keep track of this also
 				valsForScore[curr] = append(valsForScore[curr], &ScoreCounter{
-					val:    val,
-					w:      0,
-					d:      1,
-					maxWin: maxWinFlo,
+					val:          val,
+					w:            0,
+					d:            1,
+					maxWin:       maxWinFlo,
+					maxWinNoNorm: maxWinFlo,
 
 					charAskMin:  charAskMin,
 					charAskMax:  charAskMax,
@@ -283,8 +287,8 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		for _, score := range valsForScore[curr] {
 			centroid := tr.getClosestCentroid(score, curr)
 			avgScoreCent[centroid] += score.score
-			avgMaxWin[centroid] += score.maxWin
-			tr.maxWinByCentroid[centroid] += score.maxWin
+			avgMaxWin[centroid] += score.maxWinNoNorm
+			tr.maxWinByCentroid[centroid] += score.maxWinNoNorm
 			scoresByCentroid[centroid]++
 			if centroid == 10 {
 				log.Debug("Score on master centroid:", score)
@@ -363,9 +367,9 @@ func (tr *TrainerCorrelations) ShouldISell(curr string, currVal, askVal *charont
 		// More than the half of the time and some profit
 		log.Debug("Selling by profit > 1 and time > totalTime/2, secs used", secondsUsed, "Secs to wait:", secsToWaitUntilForceSell/2, "Profit:", currVal.Bid/askVal.Ask, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderID]])
 		return true
-	case currVal.Bid/askVal.Ask-1 > tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderID]]/2:
-		// More than the AVG profit/2
-		log.Debug("Selling by profit > avg/2, Profit:", currVal.Bid/askVal.Ask, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderID]])
+	case currVal.Bid/askVal.Ask-1 > tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderID]]/3:
+		// More than the AVG profit/3
+		log.Debug("Selling by profit > avg/3, Profit:", currVal.Bid/askVal.Ask, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderID]])
 		return true
 	case secondsUsed > secsToWaitUntilForceSell:
 		// Out of time...
