@@ -1,5 +1,9 @@
 package charont
 
+const (
+	MAX_RATES_TO_STORE = 10000
+)
+
 type Price struct {
 	Ts   int64
 	Buy  float64

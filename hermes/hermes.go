@@ -7,4 +7,5 @@ type Int interface {
 	StartPlaying()
 	StopPlaying()
 	IsPlaying() bool
+	GetTotalProfit() float64
 }

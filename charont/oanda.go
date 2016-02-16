@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	MAX_RATES_TO_STORE        = 100000
 	COLLECT_BY_SECOND         = 3
 	FAKE_GENERATE_ACCOUNT_URL = "https://api-fxpractice.oanda.com/v1/accounts"
 	ACCOUNT_INFO_URL          = "https://api-fxpractice.oanda.com/v1/accounts/"
@@ -56,25 +55,30 @@ type accountStruc struct {
 }
 
 type Oanda struct {
-	mutex          sync.Mutex
-	authToken      string
-	currencies     []string
-	currencyValues map[string][]*CurrVal
-	account        *accountStruc
-	mutexCurr      map[string]*sync.Mutex
-	openOrders     map[int64]*Order
-	currLogsFile   *os.File
-	listeners      map[string][]func(currency string, ts int64)
+	mutex           sync.Mutex
+	authToken       string
+	currencies      []string
+	currencyValues  map[string][]*CurrVal
+	account         *accountStruc
+	mutexCurr       map[string]*sync.Mutex
+	openOrders      map[int64]*Order
+	simulatedOrders int64
+	currLogsFile    *os.File
+	currentWin      float64
+	listeners       map[string][]func(currency string, ts int64)
 }
 
 func InitOandaApi(authToken string, accountId int, currencies []string, currLogsFile string) (api *Oanda, err error) {
 	var resp []byte
 
 	api = &Oanda{
-		authToken:  authToken,
-		currencies: currencies,
-		mutexCurr:  make(map[string]*sync.Mutex),
-		listeners:  make(map[string][]func(currency string, ts int64)),
+		openOrders:      make(map[int64]*Order),
+		authToken:       authToken,
+		currencies:      currencies,
+		mutexCurr:       make(map[string]*sync.Mutex),
+		listeners:       make(map[string][]func(currency string, ts int64)),
+		currentWin:      0,
+		simulatedOrders: 0,
 	}
 
 	if currLogsFile != "" {
@@ -185,7 +189,25 @@ func (api *Oanda) GetRange(curr string, from, to int64) []*CurrVal {
 	return api.currencyValues[curr][fromPos:toPos]
 }
 
-func (api *Oanda) placeMarketOrder(inst string, units int, side string, price float64) (order *Order, err error) {
+func (api *Oanda) placeMarketOrder(inst string, units int, side string, price float64, realOps bool, ts int64) (order *Order, err error) {
+	if !realOps {
+		api.mutex.Lock()
+		defer api.mutex.Unlock()
+
+		api.openOrders[api.simulatedOrders] = &Order{
+			Id:    api.simulatedOrders,
+			Price: price,
+			Units: units,
+			Open:  true,
+			Type:  side,
+			Real:  false,
+			BuyTs: ts,
+			Curr:  inst,
+		}
+		api.simulatedOrders++
+		return api.openOrders[api.simulatedOrders-1], nil
+	}
+
 	var orderInfo orderStruc
 	var bound string
 
@@ -221,6 +243,9 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 		Units: units,
 		Open:  true,
 		Type:  side,
+		BuyTs: ts,
+		Curr:  inst,
+		Real:  true,
 	}
 
 	api.mutex.Lock()
@@ -232,28 +257,42 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 
 // TODO: Implement the realOps flag
 func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
-	return api.placeMarketOrder(currency, units, "buy", bound)
+	return api.placeMarketOrder(currency, units, "buy", bound, realOps, ts)
 }
 
 func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
-	return api.placeMarketOrder(currency, units, "sell", bound)
+	return api.placeMarketOrder(currency, units, "sell", bound, realOps, ts)
 }
 
 func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
-	resp, err := api.doRequest("DELETE", fmt.Sprintf(CHECK_ORDER_URL, api.account.AccountId, ord.Id), nil)
-	if err != nil {
-		log.Error("Problem trying to close an open position, Error:", err)
-		return
-	}
-	generic := map[string]float64{}
-	json.Unmarshal(resp, &generic)
+	var realOrder string
 
-	ord.CloseRate = generic["price"]
-	ord.Profit = generic["profit"]
-	log.Debug("Closed Order:", ord.Id, "With rate:", ord.CloseRate, "And Profit:", ord.Profit)
-	api.mutex.Lock()
-	delete(api.openOrders, ord.Id)
-	api.mutex.Unlock()
+	ord.SellTs = ts
+	ord.Open = false
+	if ord.Real {
+		resp, err := api.doRequest("DELETE", fmt.Sprintf(CHECK_ORDER_URL, api.account.AccountId, ord.Id), nil)
+		if err != nil {
+			log.Error("Problem trying to close an open position, Error:", err)
+			return err
+		}
+		generic := map[string]float64{}
+		json.Unmarshal(resp, &generic)
+
+		ord.CloseRate = generic["price"]
+		ord.Profit = generic["profit"]
+		api.mutex.Lock()
+		delete(api.openOrders, ord.Id)
+		api.mutex.Unlock()
+
+		api.currentWin += ord.Profit * float64(ord.Units)
+		realOrder = "Real"
+	} else {
+		lastPrice := api.currencyValues[ord.Curr][len(api.currencyValues[ord.Curr])-1]
+		ord.CloseRate = lastPrice.Bid
+		ord.Profit = ord.CloseRate/ord.Price - 1
+		realOrder = "Simultaion"
+	}
+	log.Debug("Closed Order:", ord.Id, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", api.currentWin, "Type:", realOrder)
 
 	return
 }

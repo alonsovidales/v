@@ -13,6 +13,10 @@ import (
 	"github.com/alonsovidales/pit/log"
 )
 
+const (
+	tsMultToSecs = 1000000000
+)
+
 type Mock struct {
 	mutex          sync.Mutex
 	feedsBySecond  int
@@ -81,8 +85,8 @@ func (mock *Mock) GetBaseCurrency() string {
 }
 
 func (mock *Mock) GetCurrencies() []string {
-	return []string{"USD"}
-	//return mock.currencies
+	//return []string{"USD"}
+	return mock.currencies
 }
 
 func (mock *Mock) GetRange(curr string, from, to int64) []*CurrVal {
@@ -137,6 +141,17 @@ func (mock *Mock) GetRange(curr string, from, to int64) []*CurrVal {
 	return mock.currencyValues[curr][fromPos:toPos]
 }
 
+func (mock *Mock) getCurrentRealProfit() (profit float64) {
+	profit = 1
+	for _, ord := range mock.openOrders {
+		if ord.Real {
+			profit *= ord.Profit
+		}
+	}
+
+	return
+}
+
 func (mock *Mock) placeMarketOrder(inst string, units int, side string, price float64, realOps bool, ts int64) (order *Order, err error) {
 	// TODO Place market order
 	mock.mutex.Lock()
@@ -166,20 +181,27 @@ func (mock *Mock) Sell(currency string, units int, bound float64, realOps bool, 
 }
 
 func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
+	var realOrder string
+
 	currVals := mock.currencyValues[ord.Curr]
 	ord.CloseRate = currVals[len(currVals)-1].Bid
 	ord.SellTs = ts
 	ord.Profit = ord.CloseRate/ord.Price - 1
-	log.Debug("Closed Order:", ord.Id, "With rate:", ord.CloseRate, "And Profit:", ord.Profit)
+
 	mock.mutex.Lock()
 	mock.ordersByCurr[ord.Curr] = append(mock.ordersByCurr[ord.Curr], ord)
+
 	delete(mock.openOrders, ord.Id)
 	mock.mutex.Unlock()
 
 	if ord.Real {
 		mock.currentWin += ord.Profit * float64(ord.Units)
+		realOrder = "Real"
+	} else {
+		realOrder = "Simultaion"
 	}
 
+	log.Debug("Closed Order:", ord.Id, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", mock.currentWin, "Type:", realOrder)
 	return
 }
 
