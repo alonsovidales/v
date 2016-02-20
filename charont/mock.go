@@ -186,7 +186,12 @@ func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
 	currVals := mock.currencyValues[ord.Curr]
 	ord.CloseRate = currVals[len(currVals)-1].Bid
 	ord.SellTs = ts
-	ord.Profit = ord.CloseRate/ord.Price - 1
+
+	if ord.Type == "buy" {
+		ord.Profit = ord.CloseRate/ord.Price - 1
+	} else {
+		ord.Profit = ord.Price/ord.CloseRate - 1
+	}
 
 	mock.mutex.Lock()
 	mock.ordersByCurr[ord.Curr] = append(mock.ordersByCurr[ord.Curr], ord)
@@ -201,7 +206,7 @@ func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
 		realOrder = "Simultaion"
 	}
 
-	log.Debug("Closed Order:", ord.Id, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", mock.currentWin, "Type:", realOrder)
+	log.Debug("Closed Order:", ord.Id, "TypeOrd:", ord.Type, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", mock.currentWin, "Type:", realOrder)
 	return
 }
 

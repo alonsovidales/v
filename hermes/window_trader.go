@@ -71,14 +71,18 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	}
 	if wt.opRunning == nil {
 		// Check if we can buy
-		if wt.trainer.ShouldIBuy(curr, lastVal, rangeToStudy[:len(rangeToStudy)-1], wt.id) {
+		if should, typeOper := wt.trainer.ShouldIOperate(curr, lastVal, rangeToStudy[:len(rangeToStudy)-1], wt.id); should {
 			log.Debug("Buy:", curr, wt.id, lastVal.Ask, realOpsStr)
-			wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
+			if typeOper == "buy" {
+				wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
+			} else {
+				wt.opRunning, _ = wt.collector.Sell(curr, wt.unitsToUse, lastVal.Bid, wt.realOps, lastVal.Ts)
+			}
 			wt.askVal = lastVal
 		}
 	} else {
 		// Check if we can sell
-		if wt.trainer.ShouldISell(curr, lastVal, wt.askVal, rangeToStudy[:len(rangeToStudy)-1], wt.id) {
+		if wt.trainer.ShouldIClose(curr, lastVal, wt.askVal, rangeToStudy[:len(rangeToStudy)-1], wt.id, wt.opRunning) {
 			if err := wt.collector.CloseOrder(wt.opRunning, ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				log.Debug("Selling:", curr, "Trader:", wt.id, "Profit:", wt.ops[len(wt.ops)-1].Profit, "Time:", float64(lastVal.Ts-wt.askVal.Ts)/tsMultToSecs, "TotalProfit:", wt.GetTotalProfit(), "Real:", realOpsStr)

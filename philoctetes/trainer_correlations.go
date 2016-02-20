@@ -22,13 +22,14 @@ const (
 	clustersToUse            = 10
 	secsToWaitUntilForceSell = 3600 * 3
 	maxLoss                  = -0.003
-	TrainersToRun            = clustersToUse * 10
+	TrainersToRun            = clustersToUse * 10 * 2
 )
 
 type TrainerCorrelations struct {
 	feeds            map[string][]*charont.CurrVal
 	centroidsCurr    map[string][][]float64
 	centroidsForAsk  map[string][]int
+	centroidsForSell map[string][]int
 	maxWinByCentroid []float64
 	mutex            sync.Mutex
 }
@@ -66,9 +67,10 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 	scanner := bufio.NewScanner(feedsFile)
 
 	feeds := &TrainerCorrelations{
-		feeds:           make(map[string][]*charont.CurrVal),
-		centroidsCurr:   make(map[string][][]float64),
-		centroidsForAsk: make(map[string][]int),
+		feeds:            make(map[string][]*charont.CurrVal),
+		centroidsCurr:    make(map[string][][]float64),
+		centroidsForAsk:  make(map[string][]int),
+		centroidsForSell: make(map[string][]int),
 	}
 
 	i := 0
@@ -80,8 +82,12 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 		}
 		lineParts := strings.SplitN(scanner.Text(), ":", 2)
 		curr := lineParts[0]
+		if len(lineParts) < 2 {
+			log.Error("The line:", i, "can't be parsed")
+			continue
+		}
 		if err := json.Unmarshal([]byte(lineParts[1]), &feed); err != nil {
-			log.Error("The feeds response body is not a JSON valid, Error:", err)
+			log.Error("The feeds response body is not a JSON valid, Error:", err, "Line:", i)
 			continue
 		}
 
@@ -309,7 +315,7 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 
 			scores := make([]float64, clusters)
 			for c := 0; c < clusters; c++ {
-				tr.maxWinByCentroid[c] /= float64(scoresByCentroid[c])
+				tr.maxWinByCentroid[c] /= math.Abs(float64(scoresByCentroid[c]))
 				avgScoreCent[c] /= float64(scoresByCentroid[c])
 				avgMaxWin[c] /= float64(scoresByCentroid[c])
 				scores[c] = avgMaxWin[c]
@@ -317,10 +323,9 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 			}
 
 			sort.Float64s(scores)
-			scores = scores[clusters-clustersToUse:]
 
 			tr.centroidsForAsk[curr] = []int{}
-			for _, score := range scores {
+			for _, score := range scores[clusters-clustersToUse:] {
 				for k, v := range avgMaxWin {
 					if v == score {
 						tr.centroidsForAsk[curr] = append(tr.centroidsForAsk[curr], k)
@@ -328,7 +333,18 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 				}
 			}
 
-			log.Debug("Centroides to use:", curr, tr.centroidsForAsk[curr])
+			tr.centroidsForSell[curr] = []int{}
+			for _, score := range scores[:clustersToUse] {
+				for k, v := range avgMaxWin {
+					if v == score {
+						tr.centroidsForSell[curr] = append(tr.centroidsForSell[curr], k)
+					}
+				}
+			}
+
+			log.Debug("Centroides to buy:", curr, tr.centroidsForAsk[curr])
+			log.Debug("Centroides to sell:", curr, tr.centroidsForSell[curr])
+
 			currsTrained++
 		}(curr, vals)
 	}
@@ -356,12 +372,12 @@ func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, curr stri
 	return
 }
 
-func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, vals []*charont.CurrVal, traderID int) bool {
-	traderCentroid := traderID / clustersToUse
+func (tr *TrainerCorrelations) ShouldIOperate(curr string, val *charont.CurrVal, vals []*charont.CurrVal, traderID int) (operate bool, typeOper string) {
+	traderCentroid := traderID / clustersToUse / 2
 
 	charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, _ := tr.getPointCharacteristics(val, vals)
 	if noPossibleToStudy {
-		return false
+		return false, ""
 	}
 
 	centroid := tr.getClosestCentroid(&ScoreCounter{
@@ -371,32 +387,51 @@ func (tr *TrainerCorrelations) ShouldIBuy(curr string, val *charont.CurrVal, val
 		charAskMean: charAskMean,
 		charAskMode: charAskMode,
 	}, curr)
-	log.Debug("Point chars - charAskMin:", charAskMin, "charAskMax:", charAskMax, "charAskMean:", charAskMean, "charAskMode:", charAskMode, "traderID:", traderID, "Centroid:", centroid)
+	//log.Debug("Point chars - charAskMin:", charAskMin, "charAskMax:", charAskMax, "charAskMean:", charAskMean, "charAskMode:", charAskMode, "traderID:", traderID, "Centroid:", centroid)
 
-	return tr.centroidsForAsk[curr][traderCentroid] == centroid
+	if tr.centroidsForAsk[curr][traderCentroid] == centroid && traderID > TrainersToRun/2 {
+		return true, "buy"
+	}
+	if tr.centroidsForSell[curr][traderCentroid] == centroid && traderID <= TrainersToRun/2 {
+		return true, "sell"
+	}
+
+	return false, ""
 }
 
-func (tr *TrainerCorrelations) ShouldISell(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal, traderID int) bool {
-	traderCentroid := traderID / clustersToUse
-	traderAvgDiv := float64(traderID % clustersToUse)
+func (tr *TrainerCorrelations) ShouldIClose(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal, traderID int, ord *charont.Order) bool {
+	traderCentroid := traderID / clustersToUse / 2
+	traderAvgDiv := float64((traderID / 2) % clustersToUse)
 
 	secondsUsed := (currVal.Ts - askVal.Ts) / tsMultToSecs
 
-	switch {
-	case (secondsUsed > secsToWaitUntilForceSell/2 && currVal.Bid/askVal.Ask > 1):
-		// More than the half of the time and some profit
-		log.Debug("Selling by profit > 1 and time > totalTime/2, secs used", secondsUsed, "Centroid:", traderCentroid, "Secs to wait:", secsToWaitUntilForceSell/2, "Profit:", currVal.Bid/askVal.Ask, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderCentroid]])
-		return true
-	case currVal.Bid/askVal.Ask-1 < maxLoss:
-		log.Debug("Selling by max loss, loss:", currVal.Bid/askVal.Ask-1, "Centroid:", traderCentroid, "Max Loss:", maxLoss)
-		return true
-	case currVal.Bid/askVal.Ask-1 > tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderCentroid]]/traderAvgDiv:
-		// More than the AVG profit/3
-		log.Debug("Selling by profit > avg/", traderAvgDiv, ", Centroid:", traderCentroid, "Profit:", currVal.Bid/askVal.Ask, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderCentroid]])
-		return true
-	case secondsUsed > secsToWaitUntilForceSell:
+	if secondsUsed > secsToWaitUntilForceSell {
 		// Out of time...
 		log.Debug("Selling by time: Centroid:", traderCentroid, secondsUsed, secsToWaitUntilForceSell)
+		return true
+	}
+
+	var currentWin float64
+	var centroid int
+	if ord.Type == "buy" {
+		currentWin = (currVal.Bid / askVal.Ask) - 1
+		centroid = tr.centroidsForAsk[curr][traderCentroid]
+	} else {
+		currentWin = (currVal.Ask / askVal.Bid) - 1
+		centroid = tr.centroidsForSell[curr][traderCentroid]
+	}
+
+	switch {
+	case (secondsUsed > secsToWaitUntilForceSell/2 && currentWin > 0):
+		// More than the half of the time and some profit
+		log.Debug("Selling by profit > 1 and time > totalTime/2, secs used", secondsUsed, "Centroid:", traderCentroid, "Secs to wait:", secsToWaitUntilForceSell/2, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[centroid])
+		return true
+	case currentWin < maxLoss:
+		log.Debug("Selling by max loss, loss:", currentWin, "Centroid:", traderCentroid, "Max Loss:", maxLoss)
+		return true
+	case currentWin > tr.maxWinByCentroid[centroid]/traderAvgDiv:
+		// More than the AVG profit/3
+		log.Debug("Selling by profit > avg/", traderAvgDiv, ", Centroid:", traderCentroid, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderCentroid]])
 		return true
 	}
 

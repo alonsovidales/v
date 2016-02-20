@@ -227,12 +227,13 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 		})
 
 	if err != nil {
+		log.Error("Problem trying to place a new order, Error:", err)
 		return
 	}
 
 	err = json.Unmarshal(resp, &orderInfo)
 	if err != nil || orderInfo.Info == nil {
-		log.Error("The response from the server to place an order can't be parsed, Error:", err)
+		log.Error("The response from the server to place an order can't be parsed:", string(resp), "Error:", err)
 		return
 	}
 	log.Debug("Values: instrument:", inst, "units", units, "side:", side, "type: market ID:", orderInfo, "\nOrder response:", string(resp))
@@ -257,11 +258,13 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 
 // TODO: Implement the realOps flag
 func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
-	return api.placeMarketOrder(currency, units, "buy", bound, realOps, ts)
+	inst := fmt.Sprintf("%s_%s", api.GetBaseCurrency(), currency)
+	return api.placeMarketOrder(inst, units, "buy", bound, realOps, ts)
 }
 
 func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
-	return api.placeMarketOrder(currency, units, "sell", bound, realOps, ts)
+	inst := fmt.Sprintf("%s_%s", currency, api.GetBaseCurrency())
+	return api.placeMarketOrder(inst, units, "sell", bound, realOps, ts)
 }
 
 func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
@@ -279,15 +282,15 @@ func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 		json.Unmarshal(resp, &generic)
 
 		ord.CloseRate = generic["price"]
-		ord.Profit = generic["profit"]
+		ord.Profit = generic["profit"] / float64(ord.Units)
 		api.mutex.Lock()
 		delete(api.openOrders, ord.Id)
 		api.mutex.Unlock()
 
-		api.currentWin += ord.Profit * float64(ord.Units)
+		api.currentWin += ord.Profit
 		realOrder = "Real"
 	} else {
-		lastPrice := api.currencyValues[ord.Curr][len(api.currencyValues[ord.Curr])-1]
+		lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
 		ord.CloseRate = lastPrice.Bid
 		ord.Profit = ord.CloseRate/ord.Price - 1
 		realOrder = "Simultaion"
