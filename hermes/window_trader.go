@@ -83,7 +83,7 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	} else {
 		// Check if we can sell
 		if wt.trainer.ShouldIClose(curr, lastVal, wt.askVal, rangeToStudy[:len(rangeToStudy)-1], wt.id, wt.opRunning) {
-			if err := wt.collector.CloseOrder(wt.opRunning, ts); err == nil {
+			if err := wt.collector.CloseOrder(wt.opRunning, lastVal.Ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				log.Debug("Selling:", curr, "Trader:", wt.id, "Profit:", wt.ops[len(wt.ops)-1].Profit, "Time:", float64(lastVal.Ts-wt.askVal.Ts)/tsMultToSecs, "TotalProfit:", wt.GetTotalProfit(), "Real:", realOpsStr)
 				wt.opRunning = nil

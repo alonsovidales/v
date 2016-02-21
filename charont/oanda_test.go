@@ -40,4 +40,14 @@ func TestPlaceOrder(t *testing.T) {
 	if err != nil {
 		t.Error("Problem closing an order, Error:", err)
 	}
+
+	order, err = api.Sell("USD", 1, 1.0, true, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem placing an order, Error:", err)
+	}
+
+	err = api.CloseOrder(order, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem closing an order, Error:", err)
+	}
 }

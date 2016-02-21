@@ -196,13 +196,17 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 
 		api.openOrders[api.simulatedOrders] = &Order{
 			Id:    api.simulatedOrders,
-			Price: price,
 			Units: units,
 			Open:  true,
 			Type:  side,
 			Real:  false,
 			BuyTs: ts,
 			Curr:  inst,
+		}
+		if side == "buy" {
+			api.openOrders[api.simulatedOrders].Price = price
+		} else {
+			api.openOrders[api.simulatedOrders].CloseRate = price
 		}
 		api.simulatedOrders++
 		return api.openOrders[api.simulatedOrders-1], nil
@@ -248,6 +252,11 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 		Curr:  inst,
 		Real:  true,
 	}
+	if side == "buy" {
+		order.Price = orderInfo.Price
+	} else {
+		order.CloseRate = orderInfo.Price
+	}
 
 	api.mutex.Lock()
 	api.openOrders[order.Id] = order
@@ -263,7 +272,7 @@ func (api *Oanda) Buy(currency string, units int, bound float64, realOps bool, t
 }
 
 func (api *Oanda) Sell(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error) {
-	inst := fmt.Sprintf("%s_%s", currency, api.GetBaseCurrency())
+	inst := fmt.Sprintf("%s_%s", api.GetBaseCurrency(), currency)
 	return api.placeMarketOrder(inst, units, "sell", bound, realOps, ts)
 }
 
@@ -290,12 +299,17 @@ func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 		api.currentWin += ord.Profit
 		realOrder = "Real"
 	} else {
-		lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
-		ord.CloseRate = lastPrice.Bid
+		if ord.Type == "buy" {
+			lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
+			ord.CloseRate = lastPrice.Bid
+		} else {
+			lastPrice := api.currencyValues[ord.Curr[:3]][len(api.currencyValues[ord.Curr[:3]])-1]
+			ord.Price = lastPrice.Ask
+		}
 		ord.Profit = ord.CloseRate/ord.Price - 1
 		realOrder = "Simultaion"
 	}
-	log.Debug("Closed Order:", ord.Id, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", api.currentWin, "Type:", realOrder)
+	log.Debug("Closed Order:", ord.Id, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "OpenRate:", ord.Price, "Close rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", api.currentWin, "Type:", realOrder)
 
 	return
 }

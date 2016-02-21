@@ -160,7 +160,6 @@ func (mock *Mock) placeMarketOrder(inst string, units int, side string, price fl
 	mock.orders++
 	mock.openOrders[orderID] = &Order{
 		Id:    orderID,
-		Price: price,
 		Real:  realOps,
 		Units: units,
 		Curr:  inst,
@@ -169,6 +168,11 @@ func (mock *Mock) placeMarketOrder(inst string, units int, side string, price fl
 		BuyTs: ts,
 	}
 
+	if side == "buy" {
+		mock.openOrders[orderID].Price = price
+	} else {
+		mock.openOrders[orderID].CloseRate = price
+	}
 	return mock.openOrders[orderID], nil
 }
 
@@ -184,14 +188,13 @@ func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
 	var realOrder string
 
 	currVals := mock.currencyValues[ord.Curr]
-	ord.CloseRate = currVals[len(currVals)-1].Bid
-	ord.SellTs = ts
-
 	if ord.Type == "buy" {
-		ord.Profit = ord.CloseRate/ord.Price - 1
+		ord.CloseRate = currVals[len(currVals)-1].Bid
 	} else {
-		ord.Profit = ord.Price/ord.CloseRate - 1
+		ord.Price = currVals[len(currVals)-1].Ask
 	}
+	ord.Profit = ord.CloseRate/ord.Price - 1
+	ord.SellTs = ts
 
 	mock.mutex.Lock()
 	mock.ordersByCurr[ord.Curr] = append(mock.ordersByCurr[ord.Curr], ord)
@@ -206,7 +209,7 @@ func (mock *Mock) CloseOrder(ord *Order, ts int64) (err error) {
 		realOrder = "Simultaion"
 	}
 
-	log.Debug("Closed Order:", ord.Id, "TypeOrd:", ord.Type, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "With rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", mock.currentWin, "Type:", realOrder)
+	log.Debug("Closed Order:", ord.Id, "TypeOrd:", ord.Type, "BuyTs:", time.Unix(ord.BuyTs/tsMultToSecs, 0), "TimeToSell:", (ord.SellTs-ord.BuyTs)/tsMultToSecs, "Curr:", ord.Curr, "OpenRate:", ord.Price, "Close rate:", ord.CloseRate, "And Profit:", ord.Profit, "Current Win:", mock.currentWin, "Type:", realOrder)
 	return
 }
 

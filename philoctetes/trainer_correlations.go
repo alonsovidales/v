@@ -21,17 +21,19 @@ const (
 	clusters                 = 20
 	clustersToUse            = 10
 	secsToWaitUntilForceSell = 3600 * 3
-	maxLoss                  = -0.003
+	maxLoss                  = -0.03
 	TrainersToRun            = clustersToUse * 10 * 2
 )
 
 type TrainerCorrelations struct {
-	feeds            map[string][]*charont.CurrVal
-	centroidsCurr    map[string][][]float64
-	centroidsForAsk  map[string][]int
-	centroidsForSell map[string][]int
-	maxWinByCentroid []float64
-	mutex            sync.Mutex
+	feeds                map[string][]*charont.CurrVal
+	centroidsCurr        map[string][][]float64
+	centroidsCurrSell    map[string][][]float64
+	centroidsForAsk      map[string][]int
+	centroidsForSell     map[string][]int
+	maxWinByCentroid     map[string][]float64
+	maxWinByCentroidSell map[string][]float64
+	mutex                sync.Mutex
 }
 
 type ScoreCounter struct {
@@ -67,10 +69,13 @@ func GetTrainerCorrelations(trainingFile string, TimeRangeToStudySecs int64) Tra
 	scanner := bufio.NewScanner(feedsFile)
 
 	feeds := &TrainerCorrelations{
-		feeds:            make(map[string][]*charont.CurrVal),
-		centroidsCurr:    make(map[string][][]float64),
-		centroidsForAsk:  make(map[string][]int),
-		centroidsForSell: make(map[string][]int),
+		feeds:                make(map[string][]*charont.CurrVal),
+		centroidsCurr:        make(map[string][][]float64),
+		centroidsCurrSell:    make(map[string][][]float64),
+		centroidsForAsk:      make(map[string][]int),
+		centroidsForSell:     make(map[string][]int),
+		maxWinByCentroid:     make(map[string][]float64),
+		maxWinByCentroidSell: make(map[string][]float64),
 	}
 
 	i := 0
@@ -120,10 +125,19 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 		}*/
 		go func(curr string, vals []*charont.CurrVal) {
 			valsForScore := ByScore{}
+
+			// Params to Buy
 			minMaxWin := [2]float64{math.Inf(1), math.Inf(-1)}
 			minMaxD := [2]float64{math.Inf(1), math.Inf(-1)}
 			minMaxW := [2]float64{math.Inf(1), math.Inf(-1)}
 			lastWindowFirstPosUsed := 0
+
+			// Params to Sell
+			valsForScoreSell := ByScore{}
+			minMaxWinSell := [2]float64{math.Inf(1), math.Inf(-1)}
+			minMaxDSell := [2]float64{math.Inf(1), math.Inf(-1)}
+			minMaxWSell := [2]float64{math.Inf(1), math.Inf(-1)}
+
 		pointToStudyLoop:
 			for i, val := range vals {
 				if i%1000 == 0 {
@@ -137,6 +151,7 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 				}
 				lastWindowFirstPosUsed += firstWindowPos
 
+				// Get the range to Buy
 				found := int64(-1)
 				w := -1.0
 				maxWin := -1.0
@@ -144,7 +159,7 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 				for _, futureVal := range vals[i+1:] {
 					currWin := futureVal.Bid / val.Ask
 					if currWin > maxWin {
-						maxWin = futureVal.Bid / val.Ask
+						maxWin = currWin
 					}
 
 					if found != -1 {
@@ -159,6 +174,30 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 					}
 				}
 
+				// Get the range to Sell
+				foundSell := int64(-1)
+				wSell := -1.0
+				maxWinSell := -1.0
+			winningRangStudySell:
+				for _, futureVal := range vals[i+1:] {
+					currWin := val.Bid / futureVal.Ask
+					if currWin > maxWinSell {
+						maxWinSell = currWin
+					}
+
+					if foundSell != -1 {
+						if val.Bid < futureVal.Ask {
+							wSell = float64(futureVal.Ts - foundSell)
+							break winningRangStudySell
+						}
+					} else {
+						if currWin > 1 {
+							foundSell = futureVal.Ts
+						}
+					}
+				}
+
+				// Calculate the scores for Buy
 				maxWinFlo := maxWin - 1
 				if found != -1 {
 					if w != -1 {
@@ -211,9 +250,63 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 						charAskMode: charAskMode,
 					})
 				}
+
+				// Calculate the scores for Sell
+				maxWinFloSell := maxWinSell - 1
+				if foundSell != -1 {
+					if wSell != -1 {
+						//log.Debug("New Range:", curr, w/1000000000, float64(found-val.Ts)/1000000000, maxWin)
+						dFloSell := float64(foundSell - val.Ts)
+						valsForScoreSell = append(valsForScoreSell, &ScoreCounter{
+							val:          val,
+							w:            wSell,
+							d:            dFloSell,
+							maxWin:       maxWinFloSell,
+							maxWinNoNorm: maxWinFloSell,
+
+							charAskMin:  charAskMin,
+							charAskMax:  charAskMax,
+							charAskMean: charAskMean,
+							charAskMode: charAskMode,
+						})
+
+						if wSell < minMaxWSell[0] {
+							minMaxWSell[0] = wSell
+						}
+						if wSell > minMaxWSell[1] {
+							minMaxWSell[1] = wSell
+						}
+						if dFloSell < minMaxDSell[0] {
+							minMaxDSell[0] = dFloSell
+						}
+						if dFloSell > minMaxDSell[1] {
+							minMaxDSell[1] = dFloSell
+						}
+						if maxWinFloSell < minMaxWinSell[0] {
+							minMaxWinSell[0] = maxWinFloSell
+						}
+						if maxWinFloSell > minMaxWinSell[1] {
+							minMaxWinSell[1] = maxWinFloSell
+						}
+					}
+				} else {
+					// This is a bad point, we need to keep track of this also
+					valsForScore = append(valsForScore, &ScoreCounter{
+						val:          val,
+						w:            0,
+						d:            1,
+						maxWin:       maxWinFloSell,
+						maxWinNoNorm: maxWinFloSell,
+
+						charAskMin:  charAskMin,
+						charAskMax:  charAskMax,
+						charAskMean: charAskMean,
+						charAskMode: charAskMode,
+					})
+				}
 			}
 
-			// Now normalise and prepare the scores
+			// Now normalise and prepare the scores to Buy
 			for i := 0; i < len(valsForScore); i++ {
 				if valsForScore[i].w != 0 {
 					//log.Debug("Before Normalise:", valsForScore[i])
@@ -229,121 +322,30 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 				}
 			}
 
-			sort.Sort(valsForScore)
-			log.Debug("Error:", curr, len(valsForScore))
-			for _, score := range valsForScore[:10] {
-				log.Debug("Curr:", curr, "Score:", score)
-			}
-
-			// Using k-means try to find 2 centroids:
-			//  - Buy
-			//  - Don't buy
-			// Identify what centroid is what
-			// Check the Precission and recall obtained using this 2 centroids
-
-			// Init the clusters centroids
-			log.Debug("Moving centroids")
-			for c := 0; c < clusters; c++ {
-				pos := c * ((len(valsForScore) - 1) / (clusters - 1))
-				tr.mutex.Lock()
-				tr.centroidsCurr[curr] = append(tr.centroidsCurr[curr], []float64{
-					valsForScore[pos].charAskMin,  // ask min relation
-					valsForScore[pos].charAskMax,  // ask max relation
-					valsForScore[pos].charAskMean, // ask mean relation
-					valsForScore[pos].charAskMode, // ask mode relation
-				})
-				tr.mutex.Unlock()
-			}
-
-			modified := true
-			for modified {
-				scoresByCentroid := make([][]*ScoreCounter, clusters)
-				for _, score := range valsForScore {
-					centroid := tr.getClosestCentroid(score, curr)
-					scoresByCentroid[centroid] = append(scoresByCentroid[centroid], score)
-				}
-
-				for i := 0; i < clusters; i++ {
-					log.Debug("Items centroid:", i, len(scoresByCentroid[i]))
-				}
-
-				// Move the centroids
-				modified = false
-				for c := 0; c < clusters; c++ {
-					log.Debug("scoresByCentroid:", c, len(scoresByCentroid[c]))
-					oldCentroid := tr.centroidsCurr[curr][c]
-					tr.centroidsCurr[curr][c] = []float64{
-						0.0,
-						0.0,
-						0.0,
-						0.0,
-					}
-					scoresCentroid := float64(len(scoresByCentroid[c]))
-					for _, score := range scoresByCentroid[c] {
-						tr.centroidsCurr[curr][c][0] += score.charAskMin / scoresCentroid
-						tr.centroidsCurr[curr][c][1] += score.charAskMax / scoresCentroid
-						tr.centroidsCurr[curr][c][2] += score.charAskMean / scoresCentroid
-						tr.centroidsCurr[curr][c][3] += score.charAskMode / scoresCentroid
-					}
-
-					// Check if the centroid was moved or not
-					for i := 0; i < len(oldCentroid); i++ {
-						if oldCentroid[i] != tr.centroidsCurr[curr][c][i] {
-							modified = true
-						}
-					}
-					log.Debug("Centroids:", c, oldCentroid, tr.centroidsCurr[curr][c])
-				}
-			}
-
-			// With the clsters initted, try to estimate the score by centroid
-			avgScoreCent := make([]float64, clusters)
-			avgMaxWin := make([]float64, clusters)
-			scoresByCentroid := make([]int, clusters)
-			tr.maxWinByCentroid = make([]float64, clusters)
-			for _, score := range valsForScore {
-				centroid := tr.getClosestCentroid(score, curr)
-				avgScoreCent[centroid] += score.score
-				avgMaxWin[centroid] += score.maxWinNoNorm
-				tr.maxWinByCentroid[centroid] += score.maxWinNoNorm
-				scoresByCentroid[centroid]++
-				if centroid == 10 {
-					log.Debug("Score on master centroid:", score)
-					log.Debug("Score on master centroid-:", score.score)
-				}
-			}
-
-			scores := make([]float64, clusters)
-			for c := 0; c < clusters; c++ {
-				tr.maxWinByCentroid[c] /= math.Abs(float64(scoresByCentroid[c]))
-				avgScoreCent[c] /= float64(scoresByCentroid[c])
-				avgMaxWin[c] /= float64(scoresByCentroid[c])
-				scores[c] = avgMaxWin[c]
-				log.Debug("Centroid:", c, "Items:", scoresByCentroid[c], "Score", avgScoreCent[c], "Avg MaxWin:", avgMaxWin[c], "CentroidPos:", tr.centroidsCurr[curr][c])
-			}
-
-			sort.Float64s(scores)
-
-			tr.centroidsForAsk[curr] = []int{}
-			for _, score := range scores[clusters-clustersToUse:] {
-				for k, v := range avgMaxWin {
-					if v == score {
-						tr.centroidsForAsk[curr] = append(tr.centroidsForAsk[curr], k)
+			// Now normalise and prepare the scores to Sell
+			log.Debug("Normalise:", minMaxWinSell)
+			log.Debug("ValsForSell:", valsForScoreSell[:10])
+			for i := 0; i < len(valsForScoreSell); i++ {
+				if valsForScoreSell[i].w != 0 {
+					//log.Debug("Before Normalise:", valsForScoreSell[i])
+					valsForScoreSell[i].maxWin = (valsForScoreSell[i].maxWin - minMaxWinSell[0]) / (minMaxWinSell[1] - minMaxWinSell[0])
+					valsForScoreSell[i].d = (valsForScoreSell[i].d - minMaxDSell[0]) / (minMaxDSell[1] - minMaxDSell[0])
+					valsForScoreSell[i].w = (valsForScoreSell[i].w - minMaxWSell[0]) / (minMaxWSell[1] - minMaxWSell[0])
+					if valsForScoreSell[i].maxWin != 0 && valsForScoreSell[i].d != 0 && valsForScoreSell[i].w != 0 {
+						valsForScoreSell[i].score = (valsForScoreSell[i].maxWin * valsForScoreSell[i].w) / valsForScoreSell[i].d
+						//log.Debug("After Normalise:", valsForScoreSell[i])
+					} else {
+						valsForScoreSell[i].score = -1
 					}
 				}
 			}
 
-			tr.centroidsForSell[curr] = []int{}
-			for _, score := range scores[:clustersToUse] {
-				for k, v := range avgMaxWin {
-					if v == score {
-						tr.centroidsForSell[curr] = append(tr.centroidsForSell[curr], k)
-					}
-				}
-			}
-
+			tr.mutex.Lock()
+			tr.centroidsCurr[curr], tr.maxWinByCentroid[curr], tr.centroidsForAsk[curr] = tr.getCentroids(valsForScore)
 			log.Debug("Centroides to buy:", curr, tr.centroidsForAsk[curr])
+			tr.centroidsCurrSell[curr], tr.maxWinByCentroidSell[curr], tr.centroidsForSell[curr] = tr.getCentroids(valsForScoreSell)
 			log.Debug("Centroides to sell:", curr, tr.centroidsForSell[curr])
+			tr.mutex.Unlock()
 
 			currsTrained++
 		}(curr, vals)
@@ -354,10 +356,108 @@ func (tr *TrainerCorrelations) studyCurrencies(TimeRangeToStudySecs int64) {
 	}
 }
 
-func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, curr string) (c int) {
+func (tr *TrainerCorrelations) getCentroids(valsForScore ByScore) (centroidsCurr [][]float64, maxWinByCentroid []float64, centroidsForAsk []int) {
+	sort.Sort(valsForScore)
+
+	// Using k-means try to find 2 centroids:
+	//  - Buy
+	//  - Don't buy
+	// Identify what centroid is what
+	// Check the Precission and recall obtained using this 2 centroids
+
+	// Init the clusters centroids
+	log.Debug("Moving centroids")
+	for c := 0; c < clusters; c++ {
+		pos := c * ((len(valsForScore) - 1) / (clusters - 1))
+		centroidsCurr = append(centroidsCurr, []float64{
+			valsForScore[pos].charAskMin,  // ask min relation
+			valsForScore[pos].charAskMax,  // ask max relation
+			valsForScore[pos].charAskMean, // ask mean relation
+			valsForScore[pos].charAskMode, // ask mode relation
+		})
+	}
+
+	modified := true
+	for modified {
+		scoresByCentroid := make([][]*ScoreCounter, clusters)
+		for _, score := range valsForScore {
+			centroid := tr.getClosestCentroid(score, centroidsCurr)
+			scoresByCentroid[centroid] = append(scoresByCentroid[centroid], score)
+		}
+
+		for i := 0; i < clusters; i++ {
+			log.Debug("Items centroid:", i, len(scoresByCentroid[i]))
+		}
+
+		// Move the centroids
+		modified = false
+		for c := 0; c < clusters; c++ {
+			log.Debug("scoresByCentroid:", c, len(scoresByCentroid[c]))
+			oldCentroid := centroidsCurr[c]
+			centroidsCurr[c] = []float64{
+				0.0,
+				0.0,
+				0.0,
+				0.0,
+			}
+			scoresCentroid := float64(len(scoresByCentroid[c]))
+			for _, score := range scoresByCentroid[c] {
+				centroidsCurr[c][0] += score.charAskMin / scoresCentroid
+				centroidsCurr[c][1] += score.charAskMax / scoresCentroid
+				centroidsCurr[c][2] += score.charAskMean / scoresCentroid
+				centroidsCurr[c][3] += score.charAskMode / scoresCentroid
+			}
+
+			// Check if the centroid was moved or not
+			for i := 0; i < len(oldCentroid); i++ {
+				if oldCentroid[i] != centroidsCurr[c][i] {
+					modified = true
+				}
+			}
+			log.Debug("Centroids:", c, oldCentroid, centroidsCurr[c])
+		}
+	}
+
+	// With the clsters initted, try to estimate the score by centroid
+	avgScoreCent := make([]float64, clusters)
+	avgMaxWin := make([]float64, clusters)
+	scoresByCentroid := make([]int, clusters)
+	maxWinByCentroid = make([]float64, clusters)
+	for _, score := range valsForScore {
+		centroid := tr.getClosestCentroid(score, centroidsCurr)
+		avgScoreCent[centroid] += score.score
+		avgMaxWin[centroid] += score.maxWinNoNorm
+		maxWinByCentroid[centroid] += score.maxWinNoNorm
+		scoresByCentroid[centroid]++
+	}
+
+	scores := make([]float64, clusters)
+	for c := 0; c < clusters; c++ {
+		maxWinByCentroid[c] /= math.Abs(float64(scoresByCentroid[c]))
+		avgScoreCent[c] /= float64(scoresByCentroid[c])
+		avgMaxWin[c] /= float64(scoresByCentroid[c])
+		scores[c] = avgMaxWin[c]
+		log.Debug("Centroid:", c, "Items:", scoresByCentroid[c], "Score", avgScoreCent[c], "Avg MaxWin:", avgMaxWin[c], "CentroidPos:", centroidsCurr[c])
+	}
+
+	sort.Float64s(scores)
+
+	centroidsForAsk = []int{}
+	for _, score := range scores[clusters-clustersToUse:] {
+		for k, v := range avgMaxWin {
+			if v == score {
+				centroidsForAsk = append(centroidsForAsk, k)
+			}
+		}
+	}
+
+	return
+}
+
+func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, centroidsCurr [][]float64) (c int) {
 	c = 0
 	minDist := math.Inf(1)
-	for ci, centroid := range tr.centroidsCurr[curr] {
+	for ci, centroid := range centroidsCurr {
 		distToCentroid := (score.charAskMin - centroid[0]) * (score.charAskMin - centroid[0])
 		distToCentroid += (score.charAskMax - centroid[1]) * (score.charAskMax - centroid[1])
 		distToCentroid += (score.charAskMean - centroid[2]) * (score.charAskMean - centroid[2])
@@ -373,36 +473,49 @@ func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, curr stri
 }
 
 func (tr *TrainerCorrelations) ShouldIOperate(curr string, val *charont.CurrVal, vals []*charont.CurrVal, traderID int) (operate bool, typeOper string) {
-	traderCentroid := traderID / clustersToUse / 2
-
 	charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, _ := tr.getPointCharacteristics(val, vals)
 	if noPossibleToStudy {
 		return false, ""
 	}
 
-	centroid := tr.getClosestCentroid(&ScoreCounter{
-		val:         val,
-		charAskMin:  charAskMin,
-		charAskMax:  charAskMax,
-		charAskMean: charAskMean,
-		charAskMode: charAskMode,
-	}, curr)
-	//log.Debug("Point chars - charAskMin:", charAskMin, "charAskMax:", charAskMax, "charAskMean:", charAskMean, "charAskMode:", charAskMode, "traderID:", traderID, "Centroid:", centroid)
+	if traderID >= TrainersToRun/2 {
+		// Buy?
+		traderCentroid := (traderID - (TrainersToRun / 2)) / clustersToUse
+		centroid := tr.getClosestCentroid(&ScoreCounter{
+			val:         val,
+			charAskMin:  charAskMin,
+			charAskMax:  charAskMax,
+			charAskMean: charAskMean,
+			charAskMode: charAskMode,
+		}, tr.centroidsCurrSell[curr])
 
-	if tr.centroidsForAsk[curr][traderCentroid] == centroid && traderID > TrainersToRun/2 {
-		return true, "buy"
-	}
-	if tr.centroidsForSell[curr][traderCentroid] == centroid && traderID <= TrainersToRun/2 {
-		return true, "sell"
+		if tr.centroidsForAsk[curr][traderCentroid] == centroid {
+			return true, "buy"
+		}
+	} else {
+		// Sell?
+		traderCentroid := traderID / clustersToUse
+		centroid := tr.getClosestCentroid(&ScoreCounter{
+			val:         val,
+			charAskMin:  charAskMin,
+			charAskMax:  charAskMax,
+			charAskMean: charAskMean,
+			charAskMode: charAskMode,
+		}, tr.centroidsCurr[curr])
+
+		if tr.centroidsForSell[curr][traderCentroid] == centroid {
+			return true, "sell"
+		}
 	}
 
 	return false, ""
 }
 
 func (tr *TrainerCorrelations) ShouldIClose(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal, traderID int, ord *charont.Order) bool {
-	traderCentroid := traderID / clustersToUse / 2
-	traderAvgDiv := float64((traderID / 2) % clustersToUse)
+	var centroid, traderCentroid int
+	var currentWin float64
 
+	traderAvgDiv := float64(traderID % clustersToUse)
 	secondsUsed := (currVal.Ts - askVal.Ts) / tsMultToSecs
 
 	if secondsUsed > secsToWaitUntilForceSell {
@@ -411,27 +524,35 @@ func (tr *TrainerCorrelations) ShouldIClose(curr string, currVal, askVal *charon
 		return true
 	}
 
-	var currentWin float64
-	var centroid int
 	if ord.Type == "buy" {
-		currentWin = (currVal.Bid / askVal.Ask) - 1
+		traderCentroid = (traderID - (TrainersToRun / 2)) / clustersToUse
+		currentWin = (currVal.Bid / ord.Price) - 1
 		centroid = tr.centroidsForAsk[curr][traderCentroid]
+
+		if currentWin > tr.maxWinByCentroid[curr][centroid]/traderAvgDiv {
+			// More than the AVG profit/3
+			log.Debug("Selling by profit > avg/", traderAvgDiv, ", Centroid:", traderCentroid, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[curr][tr.centroidsForAsk[curr][traderCentroid]])
+			return true
+		}
 	} else {
-		currentWin = (currVal.Ask / askVal.Bid) - 1
+		traderCentroid = traderID / clustersToUse
+		currentWin = (ord.CloseRate / currVal.Ask) - 1
 		centroid = tr.centroidsForSell[curr][traderCentroid]
+
+		if currentWin > tr.maxWinByCentroidSell[curr][centroid]/traderAvgDiv {
+			// More than the AVG profit/3
+			log.Debug("Selling by profit > avg/", traderAvgDiv, ", Centroid:", traderCentroid, "Profit:", currentWin, "Avg:", tr.maxWinByCentroidSell[curr][tr.centroidsForAsk[curr][traderCentroid]])
+			return true
+		}
 	}
 
-	switch {
-	case (secondsUsed > secsToWaitUntilForceSell/2 && currentWin > 0):
+	if secondsUsed > secsToWaitUntilForceSell/2 && currentWin > 0 {
 		// More than the half of the time and some profit
-		log.Debug("Selling by profit > 1 and time > totalTime/2, secs used", secondsUsed, "Centroid:", traderCentroid, "Secs to wait:", secsToWaitUntilForceSell/2, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[centroid])
+		log.Debug("Selling by profit > 1 and time > totalTime/2, secs used", secondsUsed, "Centroid:", traderCentroid, "Secs to wait:", secsToWaitUntilForceSell/2, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[curr][centroid])
 		return true
-	case currentWin < maxLoss:
+	}
+	if currentWin < maxLoss {
 		log.Debug("Selling by max loss, loss:", currentWin, "Centroid:", traderCentroid, "Max Loss:", maxLoss)
-		return true
-	case currentWin > tr.maxWinByCentroid[centroid]/traderAvgDiv:
-		// More than the AVG profit/3
-		log.Debug("Selling by profit > avg/", traderAvgDiv, ", Centroid:", traderCentroid, "Profit:", currentWin, "Avg:", tr.maxWinByCentroid[tr.centroidsForAsk[curr][traderCentroid]])
 		return true
 	}
 
