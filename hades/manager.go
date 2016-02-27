@@ -15,7 +15,7 @@ type Hades struct {
 	collector         charont.Int
 	lastOpsToConsider int
 	tradesThatCanPlay int
-	tradersPlaying    []hermes.Int
+	tradersPlaying    map[int]hermes.Int
 }
 
 type SortTraders struct {
@@ -35,7 +35,7 @@ func GetHades(trainer philoctetes.TrainerInt, traders int, from int, collector c
 		collector:         collector,
 		tradesThatCanPlay: tradesThatCanPlay,
 		lastOpsToConsider: lastOpsToConsider,
-		tradersPlaying:    []hermes.Int{},
+		tradersPlaying:    make(map[int]hermes.Int),
 	}
 
 	for i, curr := range collector.GetCurrencies() {
@@ -63,18 +63,29 @@ func (hades *Hades) manageTraders() {
 				})
 			}
 		}
-
-		for _, trader := range hades.tradersPlaying {
-			trader.StopPlaying()
-		}
-		hades.tradersPlaying = []hermes.Int{}
 		sort.Sort(canPlay)
-		if len(canPlay) > hades.tradesThatCanPlay {
-			canPlay = canPlay[:hades.tradesThatCanPlay]
+
+		toStop := []int{}
+		for id, trader := range hades.tradersPlaying {
+			if trader.StopPlaying() {
+				toStop = append(toStop, id)
+			}
 		}
-		for _, trader := range canPlay {
-			trader.Trader.StartPlaying()
-			hades.tradersPlaying = append(hades.tradersPlaying, trader.Trader)
+
+		for _, id := range toStop {
+			delete(hades.tradersPlaying, id)
+		}
+
+	addTradersLoop:
+		for _, newTrader := range canPlay {
+			if _, ok := hades.tradersPlaying[newTrader.Trader.GetID()]; !ok {
+				hades.tradersPlaying[newTrader.Trader.GetID()] = newTrader.Trader
+				newTrader.Trader.StartPlaying()
+			}
+
+			if len(hades.tradersPlaying) > hades.tradesThatCanPlay {
+				break addTradersLoop
+			}
 		}
 	}
 }

@@ -16,11 +16,11 @@ import (
 
 const (
 	COLLECT_BY_SECOND         = 3
-	FAKE_GENERATE_ACCOUNT_URL = "https://api-fxpractice.oanda.com/v1/accounts"
-	ACCOUNT_INFO_URL          = "https://api-fxpractice.oanda.com/v1/accounts/"
-	PLACE_ORDER_URL           = "https://api-fxpractice.oanda.com/v1/accounts/%d/orders"
-	FEEDS_URL                 = "https://api-fxpractice.oanda.com/v1/prices?instruments="
-	CHECK_ORDER_URL           = "https://api-fxpractice.oanda.com/v1/accounts/%d/trades/%d"
+	FAKE_GENERATE_ACCOUNT_URL = "https://%s/v1/accounts"
+	ACCOUNT_INFO_URL          = "https://%s/v1/accounts/"
+	PLACE_ORDER_URL           = "https://%s/v1/accounts/%d/orders"
+	FEEDS_URL                 = "https://%s/v1/prices?instruments="
+	CHECK_ORDER_URL           = "https://%s/v1/accounts/%d/trades/%d"
 )
 
 type feedStruc struct {
@@ -57,6 +57,7 @@ type accountStruc struct {
 type Oanda struct {
 	mutex           sync.Mutex
 	authToken       string
+	endpoint        string
 	currencies      []string
 	currencyValues  map[string][]*CurrVal
 	account         *accountStruc
@@ -68,10 +69,11 @@ type Oanda struct {
 	listeners       map[string][]func(currency string, ts int64)
 }
 
-func InitOandaApi(authToken string, accountId int, currencies []string, currLogsFile string) (api *Oanda, err error) {
+func InitOandaApi(endpoint string, authToken string, accountId int, currencies []string, currLogsFile string) (api *Oanda, err error) {
 	var resp []byte
 
 	api = &Oanda{
+		endpoint:        endpoint,
 		openOrders:      make(map[int64]*Order),
 		authToken:       authToken,
 		currencies:      currencies,
@@ -93,7 +95,7 @@ func InitOandaApi(authToken string, accountId int, currencies []string, currLogs
 	if accountId == -1 {
 		var accInfo map[string]interface{}
 
-		respHttp, err := http.PostForm(FAKE_GENERATE_ACCOUNT_URL, nil)
+		respHttp, err := http.PostForm(fmt.Sprintf(FAKE_GENERATE_ACCOUNT_URL, api.endpoint), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -106,11 +108,11 @@ func InitOandaApi(authToken string, accountId int, currencies []string, currLogs
 		if err != nil {
 			return nil, err
 		}
-		resp, err = api.doRequest("GET", ACCOUNT_INFO_URL, nil)
+		resp, err = api.doRequest("GET", fmt.Sprintf(ACCOUNT_INFO_URL, api.endpoint), nil)
 
 		log.Info("New account generated:", int(accInfo["accountId"].(float64)))
 	} else {
-		resp, err = api.doRequest("GET", fmt.Sprintf("%s%d", ACCOUNT_INFO_URL, accountId), nil)
+		resp, err = api.doRequest("GET", fmt.Sprintf("%s%d", fmt.Sprintf(ACCOUNT_INFO_URL, api.endpoint), accountId), nil)
 	}
 
 	if err != nil {
@@ -221,7 +223,7 @@ func (api *Oanda) placeMarketOrder(inst string, units int, side string, price fl
 		bound = "upperBound"
 	}
 
-	resp, err := api.doRequest("POST", fmt.Sprintf(PLACE_ORDER_URL, api.account.AccountId),
+	resp, err := api.doRequest("POST", fmt.Sprintf(PLACE_ORDER_URL, api.endpoint, api.account.AccountId),
 		url.Values{
 			"instrument": {inst},
 			"units":      {fmt.Sprintf("%d", int(units))},
@@ -282,7 +284,7 @@ func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 	ord.SellTs = ts
 	ord.Open = false
 	if ord.Real {
-		resp, err := api.doRequest("DELETE", fmt.Sprintf(CHECK_ORDER_URL, api.account.AccountId, ord.Id), nil)
+		resp, err := api.doRequest("DELETE", fmt.Sprintf(CHECK_ORDER_URL, api.endpoint, api.account.AccountId, ord.Id), nil)
 		if err != nil {
 			log.Error("Problem trying to close an open position, Error:", err)
 			return err
@@ -299,11 +301,10 @@ func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 		api.currentWin += ord.Profit
 		realOrder = "Real"
 	} else {
+		lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
 		if ord.Type == "buy" {
-			lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
 			ord.CloseRate = lastPrice.Bid
 		} else {
-			lastPrice := api.currencyValues[ord.Curr[:3]][len(api.currencyValues[ord.Curr[:3]])-1]
 			ord.Price = lastPrice.Ask
 		}
 		ord.Profit = ord.CloseRate/ord.Price - 1
@@ -339,7 +340,7 @@ func (api *Oanda) ratesCollector() {
 	}
 	api.mutex.Unlock()
 
-	feedsUrl := FEEDS_URL + strings.Join(currExange, "%2C")
+	feedsUrl := fmt.Sprintf(FEEDS_URL, api.endpoint) + strings.Join(currExange, "%2C")
 	log.Info("Parsing currencies from the feeds URL:", feedsUrl)
 
 	c := time.Tick((1000 / COLLECT_BY_SECOND) * time.Millisecond)

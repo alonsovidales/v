@@ -13,6 +13,7 @@ func TestPlaceOrder(t *testing.T) {
 	cfg.Init("v", "dev")
 
 	api, err := InitOandaApi(
+		cfg.GetStr("oanda", "endpoint"),
 		cfg.GetStr("oanda", "token"),
 		int(cfg.GetInt("oanda", "account-id")),
 		strings.Split(cfg.GetStr("oanda", "currencies"), ","),
@@ -42,6 +43,26 @@ func TestPlaceOrder(t *testing.T) {
 	}
 
 	order, err = api.Sell("USD", 1, 1.0, true, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem placing an order, Error:", err)
+	}
+
+	err = api.CloseOrder(order, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem closing an order, Error:", err)
+	}
+
+	order, err = api.Buy("USD", 1, 1.3, false, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem placing an order, Error:", err)
+	}
+
+	err = api.CloseOrder(order, time.Now().Unix())
+	if err != nil {
+		t.Error("Problem closing an order, Error:", err)
+	}
+
+	order, err = api.Sell("USD", 1, 1.0, false, time.Now().Unix())
 	if err != nil {
 		t.Error("Problem placing an order, Error:", err)
 	}

@@ -5,7 +5,8 @@ type Int interface {
 	GetMicsecsBetweenOps(lastOps int) float64
 	GetNumOps() int
 	StartPlaying()
-	StopPlaying()
+	StopPlaying() bool
+	GetID() int
 	IsPlaying() bool
 	GetTotalProfit() float64
 }

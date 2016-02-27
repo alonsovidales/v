@@ -48,13 +48,14 @@ func main() {
 
 	if runningMode != "train" {
 		collector, err = charont.InitOandaApi(
+			cfg.GetStr("oanda", "endpoint"),
 			cfg.GetStr("oanda", "token"),
 			int(cfg.GetInt("oanda", "account-id")),
 			strings.Split(cfg.GetStr("oanda", "currencies"), ","),
 			cfg.GetStr("oanda", "exanges-log"),
 		)
 		if err != nil {
-			log.Fatal("The API connection can't be loaded")
+			log.Fatal("The API connection can't be loaded:", err)
 		}
 	} else {
 		if len(os.Args) < 4 {

@@ -49,6 +49,10 @@ func GetWindowTrader(id int, trainer philoctetes.TrainerInt, curr string, collec
 	return
 }
 
+func (wt *windowTrader) GetID() int {
+	return wt.id
+}
+
 func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	var realOpsStr string
 
@@ -104,8 +108,13 @@ func (wt *windowTrader) StartPlaying() {
 	wt.realOps = true
 }
 
-func (wt *windowTrader) StopPlaying() {
+func (wt *windowTrader) StopPlaying() bool {
+	if wt.opRunning != nil {
+		return false
+	}
+
 	wt.realOps = false
+	return true
 }
 
 func (wt *windowTrader) GetMicsecsBetweenOps(lastOps int) float64 {
