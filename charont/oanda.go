@@ -138,6 +138,19 @@ func (api *Oanda) GetCurrencies() []string {
 	return api.currencies
 }
 
+func (api *Oanda) GetAllCurrVals() (result map[string][]*CurrVal) {
+	api.mutex.Lock()
+	defer api.mutex.Unlock()
+
+	result = make(map[string][]*CurrVal)
+
+	for curr, values := range api.currencyValues {
+		result[curr] = values
+	}
+
+	return
+}
+
 func (api *Oanda) GetRange(curr string, from, to int64) []*CurrVal {
 	api.mutexCurr[curr].Lock()
 	defer api.mutexCurr[curr].Unlock()

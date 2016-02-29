@@ -59,23 +59,16 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	wt.mutex.Lock()
 	defer wt.mutex.Unlock()
 
-	rangeToStudy := wt.collector.GetRange(curr, 0, ts)
-
-	if len(rangeToStudy) < wt.samplesToConsiderer {
-		return
-	}
-
-	lastVal := rangeToStudy[len(rangeToStudy)-1]
-	//log.Debug("New price:", curr, "Ask:", lastVal.Ask, "Bid:", lastVal.Bid, "Total Prices:", len(rangeToStudy))
-
 	if wt.realOps {
 		realOpsStr = "Real"
 	} else {
 		realOpsStr = "Simulation"
 	}
+	currVals := wt.collector.GetAllCurrVals()
+	lastVal := currVals[curr][len(currVals[curr])-1]
 	if wt.opRunning == nil {
 		// Check if we can buy
-		if should, typeOper := wt.trainer.ShouldIOperate(curr, lastVal, rangeToStudy[:len(rangeToStudy)-1], wt.id); should {
+		if should, typeOper := wt.trainer.ShouldIOperate(curr, currVals, wt.id); should {
 			log.Debug("Buy:", curr, wt.id, lastVal.Ask, realOpsStr)
 			if typeOper == "buy" {
 				wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
@@ -86,7 +79,7 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 		}
 	} else {
 		// Check if we can sell
-		if wt.trainer.ShouldIClose(curr, lastVal, wt.askVal, rangeToStudy[:len(rangeToStudy)-1], wt.id, wt.opRunning) {
+		if wt.trainer.ShouldIClose(curr, wt.askVal, currVals, wt.id, wt.opRunning) {
 			if err := wt.collector.CloseOrder(wt.opRunning, lastVal.Ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
 				log.Debug("Selling:", curr, "Trader:", wt.id, "Profit:", wt.ops[len(wt.ops)-1].Profit, "Time:", float64(lastVal.Ts-wt.askVal.Ts)/tsMultToSecs, "TotalProfit:", wt.GetTotalProfit(), "Real:", realOpsStr)

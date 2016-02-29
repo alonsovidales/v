@@ -33,6 +33,7 @@ type CurrVal struct {
 type Int interface {
 	GetBaseCurrency() string
 	GetCurrencies() []string
+	GetAllCurrVals() map[string][]*CurrVal
 	GetRange(currency string, from, to int64) []*CurrVal
 	AddListerner(currency string, fn func(currency string, ts int64))
 	Buy(currency string, units int, bound float64, realOps bool, ts int64) (order *Order, err error)

@@ -22,8 +22,8 @@ const (
 	clustersToUse            = 10
 	secsToWaitUntilForceSell = 3600 * 3
 	maxLoss                  = -0.03
-	TrainersToRun            = clustersToUse * 10 * 2
-	cMinLossRange            = 0.80
+	//TrainersToRun            = clustersToUse * 10 * 2
+	cMinLossRange = 0.80
 )
 
 type TrainerCorrelations struct {
@@ -523,8 +523,10 @@ func (tr *TrainerCorrelations) getClosestCentroid(score *ScoreCounter, centroids
 	return
 }
 
-func (tr *TrainerCorrelations) ShouldIOperate(curr string, val *charont.CurrVal, vals []*charont.CurrVal, traderID int) (operate bool, typeOper string) {
-	charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, _ := tr.getPointCharacteristics(val, vals)
+func (tr *TrainerCorrelations) ShouldIOperate(curr string, vals map[string][]*charont.CurrVal, traderID int) (operate bool, typeOper string) {
+	val := vals[curr][len(vals[curr])-1]
+	vals[curr] = vals[curr][1:]
+	charAskMin, charAskMax, charAskMean, charAskMode, noPossibleToStudy, _ := tr.getPointCharacteristics(val, vals[curr])
 	if noPossibleToStudy {
 		return false, ""
 	}
@@ -562,9 +564,11 @@ func (tr *TrainerCorrelations) ShouldIOperate(curr string, val *charont.CurrVal,
 	return false, ""
 }
 
-func (tr *TrainerCorrelations) ShouldIClose(curr string, currVal, askVal *charont.CurrVal, vals []*charont.CurrVal, traderID int, ord *charont.Order) bool {
+func (tr *TrainerCorrelations) ShouldIClose(curr string, askVal *charont.CurrVal, vals map[string][]*charont.CurrVal, traderID int, ord *charont.Order) bool {
 	var centroid, traderCentroid int
 	var currentWin float64
+
+	currVal := vals[curr][len(vals[curr])-1]
 
 	traderAvgDiv := float64(traderID % clustersToUse)
 	secondsUsed := (currVal.Ts - askVal.Ts) / tsMultToSecs

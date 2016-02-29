@@ -89,6 +89,19 @@ func (mock *Mock) GetCurrencies() []string {
 	return mock.currencies
 }
 
+func (mock *Mock) GetAllCurrVals() (result map[string][]*CurrVal) {
+	mock.mutex.Lock()
+	defer mock.mutex.Unlock()
+
+	result = make(map[string][]*CurrVal)
+
+	for curr, values := range mock.currencyValues {
+		result[curr] = values
+	}
+
+	return
+}
+
 func (mock *Mock) GetRange(curr string, from, to int64) []*CurrVal {
 	mock.mutexCurr[curr].Lock()
 	defer mock.mutexCurr[curr].Unlock()

@@ -41,7 +41,11 @@ func main() {
 		cfg.GetInt("trainer", "time-range-to-study"),
 		int(cfg.GetInt("trainer", "window-size")),
 	)*/
-	trainer := philoctetes.GetTrainerCorrelations(
+	/*trainer := philoctetes.GetTrainerCorrelations(
+		cfg.GetStr("trainer", "training-set"),
+		cfg.GetInt("trainer", "time-range-to-study"),
+	)*/
+	trainer := philoctetes.GetTrainerCorrelationsCrossCurr(
 		cfg.GetStr("trainer", "training-set"),
 		cfg.GetInt("trainer", "time-range-to-study"),
 	)
