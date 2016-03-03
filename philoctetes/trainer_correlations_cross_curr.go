@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/alonsovidales/go_matrix"
 	"github.com/alonsovidales/pit/log"
@@ -15,16 +16,17 @@ import (
 
 const (
 	tsMultToSecsCrossCurr             = 1000000000
-	winSizeSecsCrossCurr              = 7200 * tsMultToSecsCrossCurr
+	winSizeSecsCrossCurr              = 600 * tsMultToSecsCrossCurr
 	minPointsInWindowCrossCurr        = 20
 	clustersCrossCurr                 = 20
 	clustersToUseCrossCurr            = 10
-	secsToWaitUntilForceSellCrossCurr = 3600 * 3
+	secsToWaitUntilForceSellCrossCurr = 600
 	maxLossCrossCurr                  = -0.03
 	cMinLossRangeCrossCurr            = 0.80
 	NumCurrencies                     = 14
 	tradersByCurr                     = 100
-	TrainersToRun                     = tradersByCurr * NumCurrencies
+	noPossibleScore                   = -1000000
+	TrainersToRun                     = tradersByCurr
 
 	valsToStudy = 4
 )
@@ -43,12 +45,15 @@ func (a charsScoreSort) Less(i, j int) bool { return a[i].score.score < a[j].sco
 type TrainerCorrelationsCrossCurr struct {
 	TrainerInt
 
-	feeds          map[string][]*charont.CurrVal
-	thetas         map[string][][]float64
-	normalization  map[string][][3]float64 // Max Min AVG
-	valsChars      map[string]charsScoreSort
-	currsPos       []string
-	lastPostByCurr map[string]int
+	feeds               map[string][]*charont.CurrVal
+	locksByCurr         map[string]*sync.Mutex
+	thetas              map[string][][]float64
+	normalization       map[string][][3]float64 // Max Min AVG
+	valsChars           map[string]charsScoreSort
+	currsPos            []string
+	lastPostByCurr      map[string]int
+	lasKnownScoreByCurr map[string]float64
+	lasKnownTsByCurr    map[string]int64
 }
 
 type score struct {
@@ -71,10 +76,13 @@ func GetTrainerCorrelationsCrossCurr(trainingFile string, TimeRangeToStudySecs i
 	scanner := bufio.NewScanner(feedsFile)
 
 	feeds := &TrainerCorrelationsCrossCurr{
-		feeds:          make(map[string][]*charont.CurrVal),
-		normalization:  make(map[string][][3]float64),
-		thetas:         make(map[string][][]float64),
-		lastPostByCurr: make(map[string]int),
+		feeds:               make(map[string][]*charont.CurrVal),
+		normalization:       make(map[string][][3]float64),
+		thetas:              make(map[string][][]float64),
+		lastPostByCurr:      make(map[string]int),
+		locksByCurr:         make(map[string]*sync.Mutex),
+		lasKnownScoreByCurr: make(map[string]float64),
+		lasKnownTsByCurr:    make(map[string]int64),
 	}
 
 	i := 0
@@ -119,6 +127,10 @@ func GetTrainerCorrelationsCrossCurr(trainingFile string, TimeRangeToStudySecs i
 	scoresByCurr := make(map[string]charsScoreSort)
 	for _, curr := range feeds.currsPos {
 		scoresByCurr[curr] = []*charsScore{}
+
+		feeds.locksByCurr[curr] = new(sync.Mutex)
+		feeds.lasKnownScoreByCurr[curr] = 0
+		feeds.lasKnownTsByCurr[curr] = 0
 	}
 	for i, curr := range feedsOrder {
 		rangesByCurr := make(map[string][]*charont.CurrVal)
@@ -160,8 +172,15 @@ func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsSco
 		log.Debug("Calculating Theta for curr:", curr)
 		y := make([]float64, len(scoresCurr))
 		x := make([][]float64, len(scoresCurr))
+		posScores := 0
+		negScores := 0
 		for i, score := range scoresCurr {
 			y[i] = score.score.score
+			if y[i] > 0 {
+				posScores++
+			} else {
+				negScores++
+			}
 			x[i] = make([]float64, len(score.chars)+1)
 			x[i][0] = 1
 			for f := 1; f < len(score.chars)+1; f++ {
@@ -171,6 +190,7 @@ func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsSco
 
 		// theta = (Xtrans * X)^-1 * Xtans * y
 		tr.thetas[curr] = mt.Mult(mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)), mt.Trans([][]float64{y}))
+		log.Debug("Curr:", curr, "Pos Scores:", posScores, "NegScores:", negScores)
 		log.Debug("Curr:", curr, "Theta:", tr.thetas[curr])
 
 		j := 0.0
@@ -184,18 +204,36 @@ func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsSco
 }
 
 func (tr *TrainerCorrelationsCrossCurr) getValScore(curr string, vals map[string][]*charont.CurrVal) (score float64, noPossible bool) {
-	chars, noPossible := tr.getCharacteristics(vals, curr, false)
-	if noPossible {
-		return 0.0, true
+	tr.locksByCurr[curr].Lock()
+	defer tr.locksByCurr[curr].Unlock()
+
+	// Use a small cache in order to don't need to recalculate the same
+	// scores for the same statuses
+	valsToStudy := vals[curr]
+	if valsToStudy[len(valsToStudy)-1].Ts == tr.lasKnownTsByCurr[curr] {
+		score = tr.lasKnownScoreByCurr[curr]
+	} else {
+		tr.lasKnownTsByCurr[curr] = valsToStudy[len(valsToStudy)-1].Ts
+
+		chars, noPossible := tr.getCharacteristics(vals, curr, false)
+		if noPossible {
+			tr.lasKnownScoreByCurr[curr] = noPossibleScore
+			tr.lasKnownTsByCurr[curr] = valsToStudy[len(valsToStudy)-1].Ts
+
+			return 0.0, true
+		}
+		tr.normalizeScoreCharacteristics(chars, curr)
+		//log.Debug("Chars:", chars.chars, "Theta:", tr.thetas[curr])
+
+		charsBias := [][]float64{append([]float64{1}, chars.chars...)}
+		scoreMatrix := mt.Mult(charsBias, tr.thetas[curr])
+		score = scoreMatrix[0][0]
+
+		tr.lasKnownScoreByCurr[curr] = score
+		tr.lasKnownTsByCurr[curr] = valsToStudy[len(valsToStudy)-1].Ts
 	}
-	tr.normalizeScoreCharacteristics(chars, curr)
-	//log.Debug("Chars:", chars.chars, "Theta:", tr.thetas[curr])
 
-	charsBias := [][]float64{append([]float64{1}, chars.chars...)}
-	scoreMatrix := mt.Mult(charsBias, tr.thetas[curr])
-	score = scoreMatrix[0][0]
-
-	return score, false
+	return score, score == noPossibleScore
 }
 
 func (tr *TrainerCorrelationsCrossCurr) ShouldIOperate(curr string, vals map[string][]*charont.CurrVal, traderID int) (operate bool, typeOper string) {
@@ -206,9 +244,12 @@ func (tr *TrainerCorrelationsCrossCurr) ShouldIOperate(curr string, vals map[str
 
 	boundary := float64((traderID%tradersByCurr)%10) / 10
 
-	log.Debug("Should I Buy, Trader:", traderID, "curr:", curr, "score:", score, "boundary:", boundary)
+	buy := score > boundary
+	if buy {
+		log.Debug("Should I Buy, Trader:", traderID, "curr:", curr, "score:", score, "boundary:", boundary)
+	}
 
-	return score > boundary, "buy"
+	return buy, "buy"
 }
 
 func (tr *TrainerCorrelationsCrossCurr) ShouldIClose(curr string, askVal *charont.CurrVal, vals map[string][]*charont.CurrVal, traderID int, ord *charont.Order) bool {
@@ -220,13 +261,16 @@ func (tr *TrainerCorrelationsCrossCurr) ShouldIClose(curr string, askVal *charon
 
 	boundary := float64((traderID%tradersByCurr)/10) / 10
 
-	log.Debug("Should I Sell, Trader:", traderID, "curr:", curr, "score:", score, "boundary:", boundary)
-
 	currentWin := (currVal.Bid / ord.Price) - 1
 	secondsUsed := (currVal.Ts - askVal.Ts) / tsMultToSecs
-	return (currentWin > 0 && (score < boundary || score < 0)) ||
-		(secondsUsed > secsToWaitUntilForceSell/2 && currentWin > 0) ||
-		(secondsUsed > secsToWaitUntilForceSell)
+	closeOrder := (currentWin > 0 && (score < boundary || score < 0)) ||
+		(secondsUsed > secsToWaitUntilForceSellCrossCurr)
+
+	if closeOrder {
+		log.Debug("Should I Sell, Trader:", traderID, "curr:", curr, "score:", score, "boundary:", boundary)
+	}
+
+	return closeOrder
 }
 
 func (tr *TrainerCorrelationsCrossCurr) calcNormalizationParams(scores map[string]charsScoreSort) {
@@ -351,7 +395,7 @@ func (tr *TrainerCorrelationsCrossCurr) getValuesToStudy(vals []*charont.CurrVal
 	var pointsInRange []*charont.CurrVal
 
 	for i, winVal := range vals {
-		if val.Ts-winVal.Ts >= winSizeSecs {
+		if val.Ts-winVal.Ts >= winSizeSecsCrossCurr {
 			pointsInRange = vals[i:]
 			firstWindowPos = i
 		} else {

@@ -69,7 +69,7 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	if wt.opRunning == nil {
 		// Check if we can buy
 		if should, typeOper := wt.trainer.ShouldIOperate(curr, currVals, wt.id); should {
-			log.Debug("Buy:", curr, wt.id, lastVal.Ask, realOpsStr)
+			log.Debug("Buy:", curr, "ID:", wt.id, "Price:", lastVal.Ask, "Type:", realOpsStr)
 			if typeOper == "buy" {
 				wt.opRunning, _ = wt.collector.Buy(curr, wt.unitsToUse, lastVal.Ask, wt.realOps, lastVal.Ts)
 			} else {
