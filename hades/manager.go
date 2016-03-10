@@ -1,6 +1,7 @@
 package hades
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -8,6 +9,10 @@ import (
 	"github.com/alonsovidales/v/charont"
 	"github.com/alonsovidales/v/hermes"
 	"github.com/alonsovidales/v/philoctetes"
+)
+
+const (
+	LastOpsToHaveInConsideration = 3
 )
 
 type Hades struct {
@@ -45,6 +50,7 @@ func GetHades(trainer philoctetes.TrainerInt, traders int, from int, collector c
 		}
 	}
 
+	go collector.Run()
 	go hades.manageTraders()
 
 	return
@@ -55,11 +61,14 @@ func (hades *Hades) manageTraders() {
 	for _ = range c {
 		canPlay := TradersSortener{}
 		for _, trader := range hades.traders {
-			//log.Debug("Checking trader to play:", i)
-			if trader.GetNumOps() >= hades.lastOpsToConsider && trader.GetScore(10000) > 1 {
+			//log.Debug("Checking trader to play:", trader.GetID(), "Ops:", trader.GetNumOps(), "Score:", trader.GetScore(LastOpsToHaveInConsideration), "Profit:", trader.GetTotalProfit())
+			if trader.GetNumOps() >= hades.lastOpsToConsider &&
+				trader.GetScore(LastOpsToHaveInConsideration) > 1 &&
+				trader.GetTotalProfit() > 1 {
+
 				canPlay = append(canPlay, &SortTraders{
 					Trader: trader,
-					Score:  trader.GetScore(10000),
+					Score:  trader.GetScore(LastOpsToHaveInConsideration),
 				})
 			}
 		}
@@ -74,18 +83,40 @@ func (hades *Hades) manageTraders() {
 
 		for _, id := range toStop {
 			delete(hades.tradersPlaying, id)
+			fmt.Println("Trader can't play anylonger:", id)
 		}
 
 	addTradersLoop:
 		for _, newTrader := range canPlay {
-			if _, ok := hades.tradersPlaying[newTrader.Trader.GetID()]; !ok {
-				hades.tradersPlaying[newTrader.Trader.GetID()] = newTrader.Trader
-				newTrader.Trader.StartPlaying()
-			}
-
 			if len(hades.tradersPlaying) > hades.tradesThatCanPlay {
 				break addTradersLoop
 			}
+
+			if _, ok := hades.tradersPlaying[newTrader.Trader.GetID()]; !ok {
+				fmt.Println("New trader to play:", newTrader.Trader.GetID(), "Score:", newTrader.Score)
+
+				hades.tradersPlaying[newTrader.Trader.GetID()] = newTrader.Trader
+				newTrader.Trader.StartPlaying()
+			}
 		}
 	}
+}
+
+func (hades *Hades) CloseAllOpenOrdersAndFinish() {
+	hades.tradesThatCanPlay = 0
+
+	allFinished := false
+	for !allFinished {
+		time.Sleep(time.Second)
+
+		allFinished = true
+		for _, trader := range hades.tradersPlaying {
+			if !trader.StopPlaying() {
+				log.Debug("Trader:", trader.GetID(), "still playing...")
+				allFinished = false
+			}
+		}
+	}
+
+	log.Debug("All the traders are done, close the system")
 }

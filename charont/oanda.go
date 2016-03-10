@@ -61,7 +61,6 @@ type Oanda struct {
 	currencies      []string
 	currencyValues  map[string][]*CurrVal
 	account         *accountStruc
-	mutexCurr       map[string]*sync.Mutex
 	openOrders      map[int64]*Order
 	simulatedOrders int64
 	currLogsFile    *os.File
@@ -77,7 +76,6 @@ func InitOandaApi(endpoint string, authToken string, accountId int, currencies [
 		openOrders:      make(map[int64]*Order),
 		authToken:       authToken,
 		currencies:      currencies,
-		mutexCurr:       make(map[string]*sync.Mutex),
 		listeners:       make(map[string][]func(currency string, ts int64)),
 		currentWin:      0,
 		simulatedOrders: 0,
@@ -125,9 +123,12 @@ func InitOandaApi(endpoint string, authToken string, accountId int, currencies [
 	}
 
 	api.mutex.Unlock()
-	go api.ratesCollector()
 
 	return
+}
+
+func (api *Oanda) Run() {
+	go api.ratesCollector()
 }
 
 func (api *Oanda) GetBaseCurrency() string {
@@ -139,21 +140,20 @@ func (api *Oanda) GetCurrencies() []string {
 }
 
 func (api *Oanda) GetAllCurrVals() (result map[string][]*CurrVal) {
-	api.mutex.Lock()
-	defer api.mutex.Unlock()
-
 	result = make(map[string][]*CurrVal)
 
+	api.mutex.Lock()
 	for curr, values := range api.currencyValues {
 		result[curr] = values
 	}
+	api.mutex.Unlock()
 
 	return
 }
 
 func (api *Oanda) GetRange(curr string, from, to int64) []*CurrVal {
-	api.mutexCurr[curr].Lock()
-	defer api.mutexCurr[curr].Unlock()
+	api.mutex.Lock()
+	defer api.mutex.Unlock()
 
 	if len(api.currencyValues[curr]) <= 1 {
 		return nil
@@ -314,7 +314,9 @@ func (api *Oanda) CloseOrder(ord *Order, ts int64) (err error) {
 		api.currentWin += ord.Profit
 		realOrder = "Real"
 	} else {
+		api.mutex.Lock()
 		lastPrice := api.currencyValues[ord.Curr[4:]][len(api.currencyValues[ord.Curr[4:]])-1]
+		api.mutex.Unlock()
 		if ord.Type == "buy" {
 			ord.CloseRate = lastPrice.Bid
 		} else {
@@ -349,7 +351,6 @@ func (api *Oanda) ratesCollector() {
 		currExange[i] = fmt.Sprintf("%s_%s", api.account.AccountCurrency, curr)
 		lasCurrPriceA[curr] = 0
 		lasCurrPriceB[curr] = 0
-		api.mutexCurr[curr] = new(sync.Mutex)
 	}
 	api.mutex.Unlock()
 
@@ -373,22 +374,23 @@ func (api *Oanda) ratesCollector() {
 		for _, feed := range feeds["prices"] {
 			curr := feed.Instrument[len(api.account.AccountCurrency)+1:]
 			if lasCurrPriceA[curr] != feed.Ask || lasCurrPriceB[curr] != feed.Bid {
-				api.mutexCurr[curr].Lock()
 				log.Debug("New price for currency:", curr, "Bid:", feed.Bid, "Ask:", feed.Ask)
+				api.mutex.Lock()
 				api.currencyValues[curr] = append(api.currencyValues[curr], &CurrVal{
 					Ts:  time.Now().UnixNano(),
 					Bid: feed.Bid,
 					Ask: feed.Ask,
 				})
+				api.mutex.Unlock()
 
 				if api.currLogsFile != nil {
 					api.mutex.Lock()
 					b, _ := json.Marshal(api.currencyValues[curr][len(api.currencyValues[curr])-1])
 					_, err := api.currLogsFile.WriteString(fmt.Sprintf("%s:%s\n", curr, string(b)))
+					api.mutex.Unlock()
 					if err != nil {
 						log.Error("Can't write into the currencies logs file, Error:", err)
 					}
-					api.mutex.Unlock()
 				}
 
 				if listeners, ok := api.listeners[curr]; ok {
@@ -396,10 +398,11 @@ func (api *Oanda) ratesCollector() {
 						go listener(curr, time.Now().UnixNano())
 					}
 				}
+				api.mutex.Lock()
 				if len(api.currencyValues[curr]) > MAX_RATES_TO_STORE {
 					api.currencyValues[curr] = api.currencyValues[curr][1:]
 				}
-				api.mutexCurr[curr].Unlock()
+				api.mutex.Unlock()
 				lasCurrPriceA[curr] = feed.Ask
 				lasCurrPriceB[curr] = feed.Bid
 			}

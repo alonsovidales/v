@@ -80,9 +80,11 @@ func (wt *windowTrader) NewPrices(curr string, ts int64) {
 	} else {
 		// Check if we can sell
 		if wt.trainer.ShouldIClose(curr, wt.askVal, currVals, wt.id, wt.opRunning) {
+			scoreBefSell := wt.GetScore(3)
+			totalProfitBefSell := wt.GetTotalProfit()
 			if err := wt.collector.CloseOrder(wt.opRunning, lastVal.Ts); err == nil {
 				wt.ops = append(wt.ops, wt.opRunning)
-				log.Debug("Selling:", curr, "Trader:", wt.id, "Profit:", wt.ops[len(wt.ops)-1].Profit, "Time:", float64(lastVal.Ts-wt.askVal.Ts)/tsMultToSecs, "TotalProfit:", wt.GetTotalProfit(), "Real:", realOpsStr)
+				log.Debug("Selling:", curr, "Trader:", wt.id, "Profit:", wt.ops[len(wt.ops)-1].Profit, "Time:", float64(lastVal.Ts-wt.askVal.Ts)/tsMultToSecs, "TotalProfit:", wt.GetTotalProfit(), "Score:", wt.GetScore(3), "scoreBefSell:", scoreBefSell, "totalProfitBefSell:", totalProfitBefSell, "Real:", realOpsStr)
 				wt.opRunning = nil
 			}
 		}

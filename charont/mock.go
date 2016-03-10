@@ -62,8 +62,6 @@ func GetMock(feedsFile string, feedsBySecond int, currencies []string, httpPort 
 		}
 	}
 
-	go mock.ratesCollector()
-
 	http.HandleFunc("/get_curr_values_orders", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
@@ -232,6 +230,10 @@ func (mock *Mock) CloseAllOpenOrders() {
 	}
 }
 
+func (mock *Mock) Run() {
+	go mock.ratesCollector()
+}
+
 func (mock *Mock) ratesCollector() {
 	mock.mutex.Lock()
 	mock.currencyValues = make(map[string][]*CurrVal)
@@ -244,10 +246,9 @@ func (mock *Mock) ratesCollector() {
 	scanner.Scan()
 	log.Info("Parsing currencies from the mock file...")
 
-	c := time.Tick(time.Duration(1000/mock.feedsBySecond) * time.Millisecond)
 	i := 0
 	lastWinVal := mock.currentWin
-	for _ = range c {
+	for {
 		var feed CurrVal
 
 		scanner.Scan()
@@ -268,7 +269,7 @@ func (mock *Mock) ratesCollector() {
 
 		if listeners, ok := mock.listeners[curr]; ok {
 			for _, listener := range listeners {
-				go listener(curr, feed.Ts)
+				listener(curr, feed.Ts)
 			}
 		}
 		if len(mock.currencyValues[curr]) > MAX_RATES_TO_STORE {

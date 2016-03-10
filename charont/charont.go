@@ -32,6 +32,7 @@ type CurrVal struct {
 
 type Int interface {
 	GetBaseCurrency() string
+	Run()
 	GetCurrencies() []string
 	GetAllCurrVals() map[string][]*CurrVal
 	GetRange(currency string, from, to int64) []*CurrVal

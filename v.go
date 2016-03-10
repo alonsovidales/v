@@ -74,7 +74,7 @@ func main() {
 	}
 
 	if runningMode != "collect" {
-		hades.GetHades(
+		manager := hades.GetHades(
 			trainer,
 			int(cfg.GetInt("traders-window", "total")),
 			int(cfg.GetInt("traders-window", "from-size")),
@@ -84,14 +84,20 @@ func main() {
 			int(cfg.GetInt("traders-window", "last-ops-to-considerer")),
 			int(cfg.GetInt("traders-window", "max-traders-that-can-play")),
 			int(cfg.GetInt("traders-window", "max-time-to-wait-sec")))
+
+		log.Info("System started...")
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
+		// Block until a signal is received.
+		<-c
+
+		log.Info("Stopping all the services")
+		manager.CloseAllOpenOrdersAndFinish()
+	} else {
+		log.Info("System started...")
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
+		// Block until a signal is received.
+		<-c
 	}
-
-	log.Info("System started...")
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
-	// Block until a signal is received.
-	<-c
-
-	log.Info("Stopping all the services")
-	collector.CloseAllOpenOrders()
 }
