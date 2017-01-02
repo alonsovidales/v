@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/alonsovidales/go_matrix"
-	"github.com/alonsovidales/go_ml"
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 )
@@ -23,7 +23,7 @@ const (
 	noPossibleScore                   = -1000000
 	TrainersToRun                     = 100
 
-	valsToStudy = 4
+	valsToStudy = 8
 )
 
 type charsScore struct {
@@ -181,33 +181,33 @@ func GetTrainerCorrelationsCrossCurr(trainingFile string, TimeRangeToStudySecs i
 func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsScoreSort) {
 	for curr, scoresCurr := range scores {
 		log.Debug("Calculating Theta for curr:", curr)
+		y := make([]float64, len(scoresCurr))
+		ySell := make([]float64, len(scoresCurr))
 		x := make([][]float64, len(scoresCurr))
-		y := make([][]float64, len(scoresCurr))
-		negativesScores := 0
-		neutralScores := 0
-		positiveScores := 0
+		posScores := 0
+		negScores := 0
 		for i, score := range scoresCurr {
-			x[i] = score.chars
-
-			switch {
-			case score.scoreBuy.score <= 0:
-				y[i] = []float64{1, 0, 0, 0}
-				negativesScores++
-				break
-			case score.scoreBuy.score <= 0.3:
-				y[i] = []float64{0, 1, 0, 0}
-				neutralScores++
-				break
-			case score.scoreBuy.score <= 0.6:
-				y[i] = []float64{0, 0, 1, 0}
-				neutralScores++
-				break
-			case score.scoreBuy.score > 0.6:
-				y[i] = []float64{0, 0, 0, 1}
-				positiveScores++
-				break
+			y[i] = score.scoreBuy.score
+			ySell[i] = score.scoreSell.score
+			if y[i] > 0 {
+				posScores++
+			} else {
+				negScores++
+			}
+			x[i] = make([]float64, len(score.chars)+1)
+			x[i][0] = 1
+			for f := 1; f < len(score.chars)+1; f++ {
+				x[i][f] = score.chars[f-1]
 			}
 		}
+
+		xStr, _ := json.Marshal(x)
+		yStr, _ := json.Marshal(y)
+
+		ioutil.WriteFile("tf_training/x_"+curr+".json", xStr, 0644)
+		ioutil.WriteFile("tf_training/y_"+curr+".json", yStr, 0644)
+
+		log.Debug("Training dataset for currency:", curr, "dumped")
 
 		// theta = (Xtrans * X)^-1 * Xtans * y
 
@@ -216,40 +216,29 @@ func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsSco
 		log.Debug("Matrix:", curr, "- Inv Mult TransItself:", mt.Inv(mt.Mult(mt.Trans(x), x)))
 		log.Debug("Matrix:", curr, "- Inv Mult TransItself trans:", mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)))*/
 
-		log.Debug("Scores: Neg:", negativesScores, "Neut:", neutralScores, "Posit:", positiveScores, "LenX:", len(x), "LenY:", len(y))
+		/*tr.thetasBuy[curr] = mt.Mult(mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)), mt.Trans([][]float64{y}))
+		tr.thetasSell[curr] = mt.Mult(mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)), mt.Trans([][]float64{ySell}))
+		log.Debug("Curr:", curr, "Pos Scores:", posScores, "NegScores:", negScores)
+		log.Debug("Curr:", curr, "ThetaBuy:", tr.thetasBuy[curr])
+		log.Debug("Curr:", curr, "ThetaSell:", tr.thetasSell[curr])*/
 
-		nn := &ml.NeuralNet{
-			X: x[:(len(x)/4)*3],
-			Y: y[:(len(y)/4)*3],
+		// Get the cost for sell and buy just to determine the precission of the model
+		/*j := 0.0
+		for i, hY := range mt.Mult(x, tr.thetasBuy[curr]) {
+			//log.Debug("hy:", hY[0], "y:", y[i])
+			j += (hY[0] - y[i]) * (hY[0] - y[i])
 		}
+		j /= 2 * float64(len(y))
+		log.Debug("Test - Curr:", curr, "CostBuy:", j)
 
-		nn.InitializeThetas([]int{len(x[0]), len(x[0]) / 2, len(x[0]) / 2, len(y[0])})
-
-		ml.Fmincg(nn, 0.001, 10000, true)
-
-		matches := 0
-		for i := (len(x) / 4) * 3; i < len(x); i++ {
-			result := nn.Hipotesis(x[i])
-			log.Debug("Expected:", y[i], "Result:", result)
-			if tr.getMaxPos(result) == tr.getMaxPos(y[i]) {
-				matches++
-			}
+		j = 0.0
+		for i, hY := range mt.Mult(x, tr.thetasSell[curr]) {
+			//log.Debug("hy:", hY[0], "y:", y[i])
+			j += (hY[0] - ySell[i]) * (hY[0] - ySell[i])
 		}
-		log.Debug("Matches:", matches, "Total:", (len(x) / 4), "Match %:", (matches/(len(x)/4))*100)
+		j /= 2 * float64(len(ySell))
+		log.Debug("Test - Curr:", curr, "CostSell:", j)*/
 	}
-}
-
-func (tr *TrainerCorrelationsCrossCurr) getMaxPos(elems []float64) int {
-	maxPos := -1
-	maxVal := 0.0
-	for i, v := range elems {
-		if v > maxVal {
-			maxPos = i
-			v = maxVal
-		}
-	}
-
-	return maxPos
 }
 
 func (tr *TrainerCorrelationsCrossCurr) getValScore(curr string, vals map[string][]*charont.CurrVal) (scoreBuy, scoreSell float64, noPossible bool) {
@@ -583,24 +572,28 @@ func (tr *TrainerCorrelationsCrossCurr) getCharacteristics(rangesByCurr map[stri
 	}
 
 	tr.locksByCurr.Lock()
-	if chars, ok := tr.charsByCurr[curr]; ok && chars.ts == rangesByCurr[curr][len(rangesByCurr[curr])-1].Ts {
-		cs.chars[0] = chars.vMin
-		cs.chars[1] = chars.vMax
-		cs.chars[2] = chars.vMean
-		cs.chars[3] = chars.vMode
+	var chars *charsByCurr
+	var ok bool
+	if chars, ok = tr.charsByCurr[curr]; ok && chars.ts == rangesByCurr[curr][len(rangesByCurr[curr])-1].Ts {
 		noPossible = chars.noPossible
 		lastPossUsed = 0
 	} else {
-		cs.chars[0], cs.chars[1], cs.chars[2], cs.chars[3], noPossible, lastPossUsed = tr.getValuesToStudy(rangesByCurr[curr][tr.lastPostByCurr[curr]:])
-		tr.charsByCurr[curr] = &charsByCurr{
-			vMin:       cs.chars[0],
-			vMax:       cs.chars[1],
-			vMean:      cs.chars[2],
-			vMode:      cs.chars[3],
-			noPossible: noPossible,
-			ts:         rangesByCurr[curr][len(rangesByCurr[curr])-1].Ts,
+		chars = &charsByCurr{
+			ts: rangesByCurr[curr][len(rangesByCurr[curr])-1].Ts,
 		}
+		chars.vMin, chars.vMax, chars.vMean, chars.vMode, chars.noPossible, lastPossUsed = tr.getValuesToStudy(rangesByCurr[curr][tr.lastPostByCurr[curr]:])
+		tr.charsByCurr[curr] = chars
 	}
+
+	cs.chars[0] = chars.vMin
+	cs.chars[2] = chars.vMax
+	cs.chars[4] = chars.vMean
+	cs.chars[6] = chars.vMode
+	cs.applyMultFeats(0)
+	cs.applyMultFeats(2)
+	cs.applyMultFeats(4)
+	cs.applyMultFeats(6)
+
 	tr.locksByCurr.Unlock()
 
 	if noPossible {
@@ -650,13 +643,25 @@ func (tr *TrainerCorrelationsCrossCurr) getCharacteristics(rangesByCurr map[stri
 			tr.lastPostByCurr[currToCompare] += lastPossUsed
 		}
 		cs.chars[i*valsToStudy] = cs.chars[0] / vMin
-		cs.chars[(i*valsToStudy)+1] = cs.chars[1] / vMax
-		cs.chars[(i*valsToStudy)+2] = cs.chars[2] / vMean
-		cs.chars[(i*valsToStudy)+3] = cs.chars[3] / vMode
+		cs.chars[(i*valsToStudy)+2] = cs.chars[2] / vMax
+		cs.chars[(i*valsToStudy)+4] = cs.chars[4] / vMean
+		cs.chars[(i*valsToStudy)+6] = cs.chars[6] / vMode
+
+		cs.applyMultFeats(i * valsToStudy)
+		cs.applyMultFeats((i * valsToStudy) + 2)
+		cs.applyMultFeats((i * valsToStudy) + 4)
+		cs.applyMultFeats((i * valsToStudy) + 6)
 		i++
 	}
+	//log.Debug("Curr:", curr, "Chars:", i, len(cs.chars), valsToStudy, len(tr.currsPos), cs.chars)
 
 	return
+}
+
+func (cs *charsScore) applyMultFeats(pos int) {
+	cs.chars[pos+1] = cs.chars[pos] * cs.chars[pos]
+	//cs.chars[pos+2] = math.Sqrt(cs.chars[pos])
+	//cs.chars[pos+2] = math.Log(cs.chars[pos])
 }
 
 func (tr *TrainerCorrelationsCrossCurr) getScore(currSection []*charont.CurrVal, getForBuy bool) (result *score) {

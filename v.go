@@ -45,11 +45,6 @@ func main() {
 		cfg.GetStr("trainer", "training-set"),
 		cfg.GetInt("trainer", "time-range-to-study"),
 	)*/
-	trainer := philoctetes.GetTrainerCorrelationsCrossCurr(
-		cfg.GetStr("trainer", "training-set"),
-		cfg.GetInt("trainer", "time-range-to-study"),
-	)
-
 	if runningMode != "train" {
 		collector, err = charont.InitOandaApi(
 			cfg.GetStr("oanda", "endpoint"),
@@ -74,6 +69,11 @@ func main() {
 	}
 
 	if runningMode != "collect" {
+		trainer := philoctetes.GetTrainerCorrelationsCrossCurr(
+			cfg.GetStr("trainer", "training-set"),
+			cfg.GetInt("trainer", "time-range-to-study"),
+		)
+
 		manager := hades.GetHades(
 			trainer,
 			int(cfg.GetInt("traders-window", "total")),
@@ -94,6 +94,7 @@ func main() {
 		log.Info("Stopping all the services")
 		manager.CloseAllOpenOrdersAndFinish()
 	} else {
+		collector.Run()
 		log.Info("System started...")
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)

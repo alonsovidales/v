@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/alonsovidales/go_matrix"
+	"github.com/alonsovidales/go_ml"
 	"github.com/alonsovidales/pit/log"
 	"github.com/alonsovidales/v/charont"
 )
@@ -180,23 +181,31 @@ func GetTrainerCorrelationsCrossCurr(trainingFile string, TimeRangeToStudySecs i
 func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsScoreSort) {
 	for curr, scoresCurr := range scores {
 		log.Debug("Calculating Theta for curr:", curr)
-		y := make([]float64, len(scoresCurr))
-		ySell := make([]float64, len(scoresCurr))
 		x := make([][]float64, len(scoresCurr))
-		posScores := 0
-		negScores := 0
+		y := make([][]float64, len(scoresCurr))
+		negativesScores := 0
+		neutralScores := 0
+		positiveScores := 0
 		for i, score := range scoresCurr {
-			y[i] = score.scoreBuy.score
-			ySell[i] = score.scoreSell.score
-			if y[i] > 0 {
-				posScores++
-			} else {
-				negScores++
-			}
-			x[i] = make([]float64, len(score.chars)+1)
-			x[i][0] = 1
-			for f := 1; f < len(score.chars)+1; f++ {
-				x[i][f] = score.chars[f-1]
+			x[i] = score.chars
+
+			switch {
+			case score.scoreBuy.score <= 0:
+				y[i] = []float64{1, 0, 0, 0}
+				negativesScores++
+				break
+			case score.scoreBuy.score <= 0.3:
+				y[i] = []float64{0, 1, 0, 0}
+				neutralScores++
+				break
+			case score.scoreBuy.score <= 0.6:
+				y[i] = []float64{0, 0, 1, 0}
+				neutralScores++
+				break
+			case score.scoreBuy.score > 0.6:
+				y[i] = []float64{0, 0, 0, 1}
+				positiveScores++
+				break
 			}
 		}
 
@@ -207,29 +216,40 @@ func (tr *TrainerCorrelationsCrossCurr) prepareThetas(scores map[string]charsSco
 		log.Debug("Matrix:", curr, "- Inv Mult TransItself:", mt.Inv(mt.Mult(mt.Trans(x), x)))
 		log.Debug("Matrix:", curr, "- Inv Mult TransItself trans:", mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)))*/
 
-		tr.thetasBuy[curr] = mt.Mult(mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)), mt.Trans([][]float64{y}))
-		tr.thetasSell[curr] = mt.Mult(mt.Mult(mt.Inv(mt.Mult(mt.Trans(x), x)), mt.Trans(x)), mt.Trans([][]float64{ySell}))
-		log.Debug("Curr:", curr, "Pos Scores:", posScores, "NegScores:", negScores)
-		log.Debug("Curr:", curr, "ThetaBuy:", tr.thetasBuy[curr])
-		log.Debug("Curr:", curr, "ThetaSell:", tr.thetasSell[curr])
+		log.Debug("Scores: Neg:", negativesScores, "Neut:", neutralScores, "Posit:", positiveScores, "LenX:", len(x), "LenY:", len(y))
 
-		// Get the cost for sell and buy just to determine the precission of the model
-		j := 0.0
-		for i, hY := range mt.Mult(x, tr.thetasBuy[curr]) {
-			//log.Debug("hy:", hY[0], "y:", y[i])
-			j += (hY[0] - y[i]) * (hY[0] - y[i])
+		nn := &ml.NeuralNet{
+			X: x[:(len(x)/4)*3],
+			Y: y[:(len(y)/4)*3],
 		}
-		j /= 2 * float64(len(y))
-		log.Debug("Test - Curr:", curr, "CostBuy:", j)
 
-		j = 0.0
-		for i, hY := range mt.Mult(x, tr.thetasSell[curr]) {
-			//log.Debug("hy:", hY[0], "y:", y[i])
-			j += (hY[0] - ySell[i]) * (hY[0] - ySell[i])
+		nn.InitializeThetas([]int{len(x[0]), len(x[0]) / 2, len(x[0]) / 2, len(y[0])})
+
+		ml.Fmincg(nn, 0, 10000, true)
+
+		matches := 0
+		for i := (len(x) / 4) * 3; i < len(x); i++ {
+			result := nn.Hipotesis(x[i])
+			log.Debug("Expected:", y[i], "Result:", result)
+			if tr.getMaxPos(result) == tr.getMaxPos(y[i]) {
+				matches++
+			}
 		}
-		j /= 2 * float64(len(ySell))
-		log.Debug("Test - Curr:", curr, "CostSell:", j)
+		log.Debug("Matches:", matches, "Total:", (len(x) / 4), "Match %:", (matches/(len(x)/4))*100)
 	}
+}
+
+func (tr *TrainerCorrelationsCrossCurr) getMaxPos(elems []float64) int {
+	maxPos := -1
+	maxVal := 0.0
+	for i, v := range elems {
+		if v > maxVal {
+			maxPos = i
+			v = maxVal
+		}
+	}
+
+	return maxPos
 }
 
 func (tr *TrainerCorrelationsCrossCurr) getValScore(curr string, vals map[string][]*charont.CurrVal) (scoreBuy, scoreSell float64, noPossible bool) {
